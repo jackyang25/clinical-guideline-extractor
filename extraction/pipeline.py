@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from extraction.formatters import wrap_guideline_output, wrap_page_output
 from extraction.llm.client import AnthropicVisionClient
 from extraction.llm.parsers import (
     ExtractionError,
@@ -18,7 +17,7 @@ from extraction.llm.parsers import (
 from extraction.processors.pdf import PageImage, render_pdf_bytes
 from extraction.utils import ensure_dir, write_json, write_text
 from schemas.validators import validate_content
-from schemas.metadata_models import ChunkInfo, GuidelineInfo, HumanAudit
+from schemas.metadata_models import ChunkInfo, HumanAudit
 
 
 @dataclass(frozen=True)

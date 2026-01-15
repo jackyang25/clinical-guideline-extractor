@@ -158,8 +158,8 @@ def main() -> None:
         "Render DPI",
         min_value=100,
         max_value=400,
-        value=200,
-        help="Image resolution for PDF rendering. Higher DPI improves text clarity but increases image size and tokens. 200 balances quality and cost.",
+        value=400,
+        help="Image resolution for PDF rendering. Higher DPI improves text clarity but increases image size and tokens. 400 provides maximum quality for accurate extraction.",
     )
 
     created_by = st.text_input(
@@ -186,12 +186,14 @@ def main() -> None:
         }
     )
     st.caption(f"SHA-256 hash enables file version tracking. Output will be saved to: ./output/{st.session_state.session_id}/")
-    st.warning("Running a new extraction will overwrite previous results. Download your files first if you want to keep them.")
 
     if st.button("Run extraction", type="primary", use_container_width=True):
         if not api_key:
             st.error("Provide an Anthropic API key to continue.")
             return
+
+        # clear previous results
+        st.session_state.extraction_results = None
 
         try:
             ensure_dir(output_dir)
@@ -298,6 +300,42 @@ def main() -> None:
 
         # calculate pages needing retry and collect errors
         pages_needing_retry = [p["page_info"]["page_number"] for p in pages_wrapped if p["page_info"]["needs_retry"]]
+        
+        # store results in session state to persist across reruns
+        st.session_state.extraction_results = {
+            "page_outputs": page_outputs,
+            "all_items_flat": all_items_flat,
+            "pages_wrapped": pages_wrapped,
+            "pages_needing_retry": pages_needing_retry,
+            "auto_metadata": auto_metadata,
+            "guideline_info": guideline_info,
+            "guideline_audit": guideline_audit,
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "model_name": model_name,
+            "output_dir": str(output_dir),
+            "session_id": st.session_state.session_id,
+        }
+
+    # display results (either just extracted or from previous run)
+    if "extraction_results" in st.session_state and st.session_state.extraction_results:
+        results = st.session_state.extraction_results
+        
+        # unpack results
+        page_outputs = results["page_outputs"]
+        all_items_flat = results["all_items_flat"]
+        pages_wrapped = results["pages_wrapped"]
+        pages_needing_retry = results["pages_needing_retry"]
+        auto_metadata = results["auto_metadata"]
+        guideline_info = results["guideline_info"]
+        guideline_audit = results["guideline_audit"]
+        total_input_tokens = results["total_input_tokens"]
+        total_output_tokens = results["total_output_tokens"]
+        model_name = results["model_name"]
+        result_output_dir = Path(results["output_dir"])
+        
+        combined_path = result_output_dir / "guideline_flat.json"
+        structured_path = result_output_dir / "guideline_hierarchical.json"
         
         if pages_needing_retry:
             st.warning(
@@ -414,7 +452,7 @@ def main() -> None:
             )
         
         st.caption("Visualize JSON structure and relationships: [jsoncrack.com/editor](https://jsoncrack.com/editor)")
-
+        
         st.subheader("Extracted content")
         if all_items_flat:
             # group by page number

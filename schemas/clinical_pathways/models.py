@@ -41,6 +41,14 @@ class ClinicalPathway(BaseModel):
     """LLM-generated clinical pathway content (pure extraction, no system metadata)."""
 
     content_type: Literal["clinical_pathway"]
+    pathway_type: Literal[
+        "diagnostic",
+        "treatment",
+        "triage",
+        "screening",
+        "monitoring",
+        "mixed",
+    ] = Field(..., description="Primary purpose of this pathway")
     topic: str = Field(..., description="Clinical topic or subject")
     specific_scenario: str
     visual_structure: Literal[

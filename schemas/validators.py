@@ -7,17 +7,15 @@ from typing import Union
 from pydantic import ValidationError
 
 from schemas.clinical_pathways.models import ClinicalPathway
-from schemas.diagnostic_criteria.models import DiagnosticCriteria
 from schemas.drug_monographs.models import DrugMonograph
 from schemas.generic.models import GenericContent
 from schemas.patient_education.models import PatientEducation
 from schemas.reference_tables.models import ReferenceTable
 from schemas.warning_signs.models import WarningSigns
 
-# Discriminated union of all content types
+# Discriminated union of all content types (6 schemas)
 ClinicalContent = Union[
     ClinicalPathway,
-    DiagnosticCriteria,
     DrugMonograph,
     GenericContent,
     PatientEducation,
@@ -67,8 +65,6 @@ def validate_content(
                 validated = DrugMonograph.model_validate(sanitized)
             elif content_type == "warning_signs":
                 validated = WarningSigns.model_validate(sanitized)
-            elif content_type == "diagnostic_criteria":
-                validated = DiagnosticCriteria.model_validate(sanitized)
             elif content_type == "patient_education":
                 validated = PatientEducation.model_validate(sanitized)
             elif content_type == "generic":
@@ -77,7 +73,7 @@ def validate_content(
                 errors.append(
                     f"Item {index}: Unknown content_type '{content_type}'. "
                     f"Must be one of: clinical_pathway, reference_table, drug_monograph, "
-                    f"warning_signs, diagnostic_criteria, patient_education, generic"
+                    f"warning_signs, patient_education, generic"
                 )
                 continue
             

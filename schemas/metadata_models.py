@@ -43,6 +43,13 @@ class GuidelineInfo(BaseModel):
     )
 
 
+class Footnote(BaseModel):
+    """A footnote or annotation from the page."""
+    
+    symbol: str = Field(..., description="The footnote marker (e.g., '1', '*', '†')")
+    text: str = Field(..., description="The footnote content")
+
+
 class PageInfo(BaseModel):
     """Page-level information (system-provided, not LLM)."""
 
@@ -58,6 +65,10 @@ class PageInfo(BaseModel):
     needs_retry: bool = Field(
         default=False,
         description="Whether this page needs to be re-extracted",
+    )
+    footnotes: list[Footnote] = Field(
+        default_factory=list,
+        description="Footnotes and annotations extracted from page bottom",
     )
 
 

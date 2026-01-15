@@ -14,6 +14,45 @@ class ExtractionError(RuntimeError):
     """Raised when extraction fails."""
 
 
+# common VLM encoding corruptions: corrupted -> original
+# these occur when UTF-8 text is misinterpreted as Latin-1
+ENCODING_FIXES: list[tuple[str, str]] = [
+    ("\u00e2\u0086\u0092", "\u2192"),  # right arrow
+    ("\u00e2\u0089\u00a5", "\u2265"),  # greater than or equal
+    ("\u00e2\u0089\u00a4", "\u2264"),  # less than or equal
+    ("\u00c2\u00b0", "\u00b0"),        # degree symbol
+    ("\u00c2\u00b5", "\u00b5"),        # micro symbol
+    ("\u00e2\u0080\u0093", "\u2013"),  # en dash
+    ("\u00e2\u0080\u0094", "\u2014"),  # em dash
+    ("\u00e2\u0080\u0099", "\u2019"),  # right single quote
+    ("\u00e2\u0080\u0098", "\u2018"),  # left single quote
+    ("\u00e2\u0080\u009c", "\u201c"),  # left double quote
+    ("\u00e2\u0080\u009d", "\u201d"),  # right double quote
+    ("\u00c3\u00a9", "\u00e9"),        # e acute
+    ("\u00c3\u00a8", "\u00e8"),        # e grave
+    ("\u00c3\u00bc", "\u00fc"),        # u umlaut
+    ("\u00c3\u00b6", "\u00f6"),        # o umlaut
+    ("\u00c3\u00a4", "\u00e4"),        # a umlaut
+    ("\u00c3\u00b1", "\u00f1"),        # n tilde
+    ("\u00c2\u00b9", "\u00b9"),        # superscript 1
+    ("\u00c2\u00b2", "\u00b2"),        # superscript 2
+    ("\u00c2\u00b3", "\u00b3"),        # superscript 3
+]
+
+
+def fix_encoding(text: str) -> str:
+    """Fix common UTF-8/Latin-1 encoding corruptions from VLM output.
+    
+    VLMs sometimes output text with encoding issues, particularly for
+    special characters like arrows, comparison symbols, and degree symbols.
+    This function applies known fixes.
+    """
+    result = text
+    for corrupted, original in ENCODING_FIXES:
+        result = result.replace(corrupted, original)
+    return result
+
+
 def load_prompt(prompt_path: Path) -> str:
     """Load a prompt file into memory."""
 
@@ -57,9 +96,14 @@ def strip_json_fence(text: str) -> str:
 
 
 def parse_json_response(raw_text: str) -> list[dict]:
-    """Parse a JSON array from the model response."""
-
-    cleaned = strip_json_fence(raw_text)
+    """Parse a JSON array from the model response.
+    
+    Applies encoding fixes before parsing to handle VLM output corruption.
+    """
+    # fix encoding issues before parsing
+    fixed_text = fix_encoding(raw_text)
+    cleaned = strip_json_fence(fixed_text)
+    
     try:
         payload = json.loads(cleaned)
     except json.JSONDecodeError as exc:

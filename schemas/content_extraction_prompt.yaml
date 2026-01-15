@@ -17,10 +17,26 @@ core_principle: |
 visual_cues: |
   Use these common visual patterns to help identify content types:
   - Red/pink boxes often indicate emergency or danger content (warning_signs)
-  - Yellow/cream boxes often indicate definitions or important context (diagnostic_criteria)
+  - Yellow/cream boxes often indicate definitions or important context (clinical_pathway with pathway_type=diagnostic)
   - Bold or colored text may indicate drug names or critical actions
   - Superscript symbols (numbers, arrows, asterisks) are cross-references
   - Copy reference markers exactly as they appear (e.g., "-> 19", "1", "-> TB")
+
+completeness_check: |
+  CRITICAL: Before finalizing, scan the ENTIRE page including:
+  - Page header and footer
+  - Footnotes at the bottom (superscript numbers/symbols with explanatory text)
+  - Small text in corners or margins
+  - Links to other pages (e.g., "-> 127", "See page 45")
+  
+  Footnotes are clinically important - they often contain:
+  - Preparation instructions (e.g., how to mix glucose solution)
+  - Dosing clarifications
+  - Definitions (e.g., "BMI = Body Mass Index")
+  - Safety warnings
+  
+  Extract ALL footnote text as a single "generic" chunk with section_type: "page_notes"
+  Do NOT try to match superscript symbols to content - just capture all footnote text
 
 content_types:
   clinical_pathway:
@@ -40,15 +56,6 @@ content_types:
       - Seek care immediately if lists
       - Urgent referral triggers
     avoid_for: IF/THEN protocols (use clinical_pathway), general symptoms lists
-
-  diagnostic_criteria:
-    description: Case definitions and criteria for diagnosing conditions
-    use_for:
-      - Syndromic case definitions
-      - Inclusion/exclusion criteria
-      - Required vs suggestive features
-      - Diagnostic algorithms without treatment
-    avoid_for: Treatment protocols (use clinical_pathway), reference ranges (use reference_table)
 
   patient_education:
     description: Instructions for patients and caregivers
@@ -94,6 +101,17 @@ schema_definitions:
     content_type:
       type: literal
       value: clinical_pathway
+      required: true
+    pathway_type:
+      type: enum
+      meaning: Primary purpose of this pathway
+      allowed_values:
+        - diagnostic
+        - treatment
+        - triage
+        - screening
+        - monitoring
+        - mixed
       required: true
     topic:
       type: string
@@ -292,47 +310,6 @@ schema_definitions:
       type: array of strings
       meaning: Reference markers exactly as shown
 
-  diagnostic_criteria:
-    content_type:
-      type: literal
-      value: diagnostic_criteria
-      required: true
-    topic:
-      type: string
-      meaning: Clinical topic
-      required: true
-    condition_name:
-      type: string
-      meaning: Name of the condition being defined
-      required: true
-    definition_summary:
-      type: string
-      meaning: Brief one-line definition if provided
-    inclusion_criteria:
-      type: array of strings
-      meaning: Criteria that must be met for diagnosis
-    exclusion_criteria:
-      type: array of strings
-      meaning: Criteria that rule out the diagnosis
-    clinical_features:
-      type: object
-      fields:
-        required: {type: array of strings, meaning: Features that must be present}
-        suggestive: {type: array of strings, meaning: Features that support the diagnosis}
-        excluding: {type: array of strings, meaning: Features that rule out the diagnosis}
-    differential_diagnoses:
-      type: array of strings
-      meaning: Other conditions to consider
-    diagnostic_tests:
-      type: array of strings
-      meaning: Tests that confirm or support the diagnosis
-    severity_classification:
-      type: array of strings
-      meaning: Severity levels if defined
-    cross_references:
-      type: array of strings
-      meaning: Reference markers exactly as shown
-
   patient_education:
     content_type:
       type: literal
@@ -381,8 +358,23 @@ output_rules:
   - For logic_connections type, use escalation for urgent/emergency situations (NOT emergency)
   - Copy cross-reference markers exactly as they appear - do not interpret them
 
+cross_reference_rules:
+  - Add reference markers to cross_references array (e.g., ["-> 16", "-> 19", "1", "2"])
+  - REMOVE reference markers from the main text fields (protocol.treat, signs_symptoms, etc.)
+  - Example - BAD: "If decreased consciousness -> 16, give dextrose"
+  - "Example - GOOD: text cleaned, then add to cross_references array separately"
+  - This prevents duplication and makes references machine-parseable
+
+logic_connections_rules:
+  - trigger: The condition that activates the connection (copy exact text)
+  - target: Use page reference if available (e.g., "page 16", "-> 19"), otherwise use the destination title
+  - type: Use "escalation" for emergencies, "follow_up" for routine next steps, "alternate_pathway" for OR branches
+  - Example: {"trigger": "decreased consciousness", "target": "page 16", "type": "escalation"}
+  - Example: {"trigger": "glucose 3-6", "target": "Risk factor assessment", "type": "follow_up"}
+
 example:
   - content_type: clinical_pathway
+    pathway_type: screening
     topic: Diabetes Screening
     specific_scenario: Prediabetes detected
     visual_structure: flowchart_path
@@ -419,32 +411,6 @@ example:
     referral_destination: Hospital emergency department
     timeframe: Immediately
     cross_references: []
-  - content_type: diagnostic_criteria
-    topic: Fever
-    condition_name: Fever
-    definition_summary: A patient with a fever has a temperature 38C or higher now or in past 3 days
-    inclusion_criteria:
-      - Temperature 38C or higher currently
-      - Temperature 38C or higher in past 3 days by history
-    exclusion_criteria: []
-    clinical_features:
-      required:
-        - Elevated body temperature
-      suggestive:
-        - Chills or rigors
-        - Sweating
-        - Malaise
-      excluding: []
-    differential_diagnoses:
-      - Malaria
-      - Upper respiratory infection
-      - Urinary tract infection
-      - Pneumonia
-    diagnostic_tests:
-      - Temperature measurement
-      - Malaria rapid test
-    severity_classification: []
-    cross_references: []
   - content_type: patient_education
     topic: Fever Management
     target_audience: caregiver
@@ -467,3 +433,15 @@ example:
       - Do not use cold water for sponging
     follow_up: Return in 2 days if fever persists
     cross_references: []
+  - content_type: generic
+    topic: Glucose Management
+    section_type: page_notes
+    summary: Footnotes explaining preparation instructions and definitions
+    key_points:
+      - "1: Glucose solution - Three teaspoons sugar (15g) in 1 cup (200mL) water"
+      - "2: Dextrose 10% - If unavailable, dilute dextrose 50% (10mL dextrose 50% + 40mL water)"
+      - "3: Insulin infusion - Start at 0.1 units/kg/hour"
+      - "4: BMI = Body Mass Index"
+      - "5: CVD = Cardiovascular Disease"
+    cross_references: []
+    raw_text: ""
