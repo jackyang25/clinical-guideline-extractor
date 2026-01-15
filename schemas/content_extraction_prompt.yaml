@@ -1,61 +1,76 @@
-schema_name: Clinical Content Chunk Extraction
-schema_version: "2.1"
+schema_name: Clinical Content Logic-Mapping Extraction
+schema_version: "3.0"
 description: |
   Extracts content chunks from guideline pages using multiple schemas.
   The LLM auto-detects content types and applies the matching extraction schema.
   Multiple content chunks can exist on a single page.
+  
+  V3.0 Enhancement: Logic-Mapping & Context-Injection
+  - Extract structured IF/THEN logic for clinical decision pathways
+  - Inject footnote content directly into relevant chunks for self-contained answers
+  - Map exit points (page references) as structured navigation metadata
 
-role: Clinical Data Architect
-task: Identify and extract all clinical content from a guideline page using appropriate schemas
+role: Senior Clinical Data Architect
+task: Decompose the guideline page into Logic-Complete, self-contained clinical chunks
 
 core_principle: |
-  Use ONLY visible text and visual cues from the screenshot.
-  Do NOT infer, assume, or add information.
-  Your job is to ORGANIZE existing content, not generate new content.
-  Choose the best-fitting schema for each piece of content.
+  Think of the page as a VISUAL-LOGICAL MAP, not just text blocks.
+  - Use ONLY visible text and visual cues from the screenshot
+  - Do NOT infer, assume, or add information
+  - Map DECISION TREES: Every Yes/No branch is a logic connection (capture BOTH positive AND negative branches)
+  - INJECT FOOTNOTES: Match superscripts to footnotes and embed the text into the chunk
+  - PRESERVE NAVIGATION: Capture all "→ Page X" markers as exit points
+  - PRESCRIBER LEVEL: If not explicitly stated, default to "nurse" for primary care guidelines or "not_applicable" if unclear
+  - NEGATIVE LOGIC: "No action" or "routine care" is a valid clinical decision - capture it explicitly
+  - GLOBAL EXCLUSIONS: If page has warnings like "Not for pregnant women", append to specific_scenario of ALL chunks
+  - Your job is to ORGANIZE existing content into logic-complete, RAG-ready chunks
 
 visual_cues: |
-  Use these common visual patterns to help identify content types:
-  - Red/pink boxes often indicate emergency or danger content (warning_signs)
-  - Yellow/cream boxes often indicate definitions or important context (clinical_pathway with pathway_type=diagnostic)
-  - Bold or colored text may indicate drug names or critical actions
-  - Superscript symbols (numbers, arrows, asterisks) are cross-references
-  - Copy reference markers exactly as they appear (e.g., "-> 19", "1", "-> TB")
+  Visual patterns for content type identification:
+  - Red/pink boxes = Emergency content (warning_signs) - HIGHEST PRIORITY
+  - Yellow/cream boxes = Diagnostic criteria (clinical_pathway with pathway_type=diagnostic)
+  - Flowchart branches (Yes/No, If/Then) = Structured logic (populate pathway_logic for BOTH branches)
+  - Bold or colored text = Drug names or critical actions
+  - Arrows (→) + page numbers = Navigation points (populate exit_points)
+  - Superscript symbols (¹, ², ³, *, †) = Footnote links (inject into implementation_notes)
+  - Small text at page bottom = Global exclusions/warnings (append to ALL chunks on page)
 
 completeness_check: |
-  CRITICAL: Before finalizing, scan the ENTIRE page including:
-  - Page header and footer
-  - Footnotes at the bottom (superscript numbers/symbols with explanatory text)
-  - Small text in corners or margins
-  - Links to other pages (e.g., "-> 127", "See page 45")
+  Scan entire page including headers, footers, footnotes, margins, and page references before finalizing.
   
-  Footnotes are clinically important - they often contain:
-  - Preparation instructions (e.g., how to mix glucose solution)
-  - Dosing clarifications
-  - Definitions (e.g., "BMI = Body Mass Index")
-  - Safety warnings
+footnote_injection_rule: |
+  V3.0 CRITICAL: Footnotes are clinically important and MUST be injected into relevant chunks.
   
-  Extract ALL footnote text as a single "generic" chunk with section_type: "page_notes"
-  Do NOT try to match superscript symbols to content - just capture all footnote text
+  Footnotes often contain:
+  - Preparation instructions (e.g., "¹ Mix 15g sugar in 200mL water")
+  - Dosing clarifications (e.g., "² If Dextrose 10% unavailable, dilute 50% solution")
+  - Definitions (e.g., "³ BMI = Body Mass Index")
+  - Safety warnings (e.g., "⁴ Do not use in patients with renal impairment")
+  
+  HOW TO HANDLE FOOTNOTES:
+  1. Find all superscript markers in the main content (¹, ², →, *, etc.)
+  2. Locate the matching footnote text at the page bottom
+  3. INJECT the footnote text into the `implementation_notes` field of the relevant chunk
+  4. Format as: "Footnote 1: [exact footnote text]"
+  5. DO NOT create a separate "generic" chunk for footnotes
+  6. If footnotes cannot be matched to a specific chunk, then create a generic chunk as fallback
 
 content_types:
   clinical_pathway:
     description: Decision trees, protocols, care pathways with IF/THEN logic
     use_for:
       - Flowcharts with decision points
-      - Step-by-step care protocols  
-      - Emergency/routine assessment tables with actions
-      - Conditional clinical pathways
+      - Step-by-step care protocols with conditional branches
+      - Assessment tables with actions
     avoid_for: Static reference tables, drug information, danger sign lists without decision logic
 
   warning_signs:
-    description: Red flags and danger signs requiring immediate attention
+    description: Emergency signs requiring immediate attention
     use_for:
-      - Red/danger boxes with symptoms to watch for
       - Emergency triage criteria
-      - Seek care immediately if lists
+      - Danger sign lists with immediate actions
       - Urgent referral triggers
-    avoid_for: IF/THEN protocols (use clinical_pathway), general symptoms lists
+    avoid_for: IF/THEN protocols (use clinical_pathway)
 
   patient_education:
     description: Instructions for patients and caregivers
@@ -86,13 +101,13 @@ content_types:
     avoid_for: Brief medication mentions in protocols, simple dosing tables
 
   generic:
-    description: Fallback for unstructured content that does not fit above types
+    description: Fallback for unstructured content
     use_for:
       - Background information and epidemiology
       - Definitions and glossaries
-      - General clinical education content
-      - Appendices and references
-    use_when: No other schema fits well
+      - Page headers/footers with metadata
+      - Orphaned footnotes that cannot be matched to a parent chunk
+    avoid_for: Most footnotes should be injected into relevant chunks via implementation_notes
 
 output_format: JSON array
 
@@ -119,8 +134,26 @@ schema_definitions:
       required: true
     specific_scenario:
       type: string
-      meaning: The specific patient situation
+      meaning: The specific patient situation. If global exclusions exist on page (e.g., "Not for pregnant women", "Age < 18 only"), append them here.
       required: true
+      example: "Glucose < 3 mmol/L (Excluding pregnant women)"
+    range_metadata:
+      type: array of objects
+      meaning: Explicit numeric ranges for machine filtering
+      fields:
+        parameter: {type: string, meaning: "What is being measured"}
+        min_value: {type: number or null, meaning: "Minimum value (null if unbounded)"}
+        max_value: {type: number or null, meaning: "Maximum value (null if unbounded)"}
+        inclusive_min: {type: boolean, meaning: "Whether min is inclusive (≥ vs >)"}
+        inclusive_max: {type: boolean, meaning: "Whether max is inclusive (≤ vs <)"}
+        unit: {type: string, meaning: "Unit (e.g., mmol/L, mmHg)"}
+      example:
+        - parameter: "glucose"
+          min_value: null
+          max_value: 3.0
+          inclusive_min: true
+          inclusive_max: false
+          unit: "mmol/L"
     visual_structure:
       type: enum
       meaning: The visual format on the page
@@ -149,15 +182,43 @@ schema_definitions:
         assess: {type: array of strings}
         treat: {type: array of strings}
         advise: {type: array of strings}
-    logic_connections:
+    pathway_logic:
       type: array of objects
-      meaning: Links to other sections or escalation paths
+      meaning: V3.0 - Structured IF/THEN decision logic for clinical reasoning
       fields:
-        trigger: {type: string, meaning: Condition that activates this connection}
-        target: {type: string, meaning: Where the patient goes next}
-        type:
-          type: enum
-          values: [escalation, comorbidity, differential_diagnosis, follow_up, alternate_pathway, prerequisite]
+        if_condition: {type: string, meaning: "The clinical state or trigger"}
+        then_action: {type: string, meaning: "The medical action to take"}
+        next_step: {type: string, meaning: "What happens next"}
+      example:
+        - if_condition: "Glucose < 3 and patient alert"
+          then_action: "Give 3 teaspoons sugar in 1 cup water"
+          next_step: "Recheck glucose after 15 minutes"
+        - if_condition: "Glucose < 3 and decreased consciousness"
+          then_action: "Give Dextrose 10% 5mL/kg IV"
+          next_step: "Emergency protocol -> Page 16"
+    implementation_notes:
+      type: array of strings
+      meaning: V3.0 - Step-by-step how-to instructions with INJECTED FOOTNOTE CONTENT
+      instructions: |
+        - Find superscript markers (¹, ², ³) in the text
+        - Locate matching footnote at page bottom
+        - Inject footnote text here as "Footnote 1: [exact text]"
+        - Include drug preparation, dosing calculations, safety warnings
+      example:
+        - "Footnote 1: Sugar water = 15g sugar (3 teaspoons) in 200mL water"
+        - "Footnote 2: If Dextrose 10% unavailable, mix 10mL Dextrose 50% + 40mL water"
+        - "Dosing: 5mL/kg IV over 5 minutes"
+    exit_points:
+      type: array of objects
+      meaning: V3.0 - Navigation points where care escalates or transitions
+      fields:
+        condition: {type: string, meaning: "The trigger that activates this exit"}
+        target: {type: string, meaning: "Where to go"}
+      example:
+        - condition: "Decreased consciousness"
+          target: "page 16"
+        - condition: "Persistent hypoglycemia after 2 treatments"
+          target: "Hospital referral"
     cross_references:
       type: array of strings
       meaning: Reference markers exactly as shown (e.g., -> 19, 1, -> TB, See page 45)
@@ -290,13 +351,17 @@ schema_definitions:
       type: enum
       allowed_values: [emergency, urgent]
       required: true
-    signs_symptoms:
+    triggers:
       type: array of strings
-      meaning: Warning signs or symptoms to watch for
+      meaning: Clinical signs that activate emergency response
       required: true
-    immediate_actions:
+    immediate_steps:
       type: array of strings
-      meaning: What to do immediately if signs present
+      meaning: Ordered list of medical actions to perform immediately
+      required: true
+    safety_checks:
+      type: array of strings
+      meaning: Specific warnings and contraindications
     referral_required:
       type: boolean
       meaning: Whether referral is required when signs present
@@ -348,69 +413,118 @@ schema_definitions:
 
 output_rules:
   - Return JSON array only, no markdown or commentary
-  - Each item MUST have a content_type field as its first field
-  - Choose the most appropriate content_type for each piece of content
+  - Each item MUST have content_type as its first field
   - Extract ALL content from the page using appropriate schemas
-  - Do NOT include taxonomy fields (chunk_id, guideline_id, page) - these are system-managed
+  - Do NOT include system fields (chunk_id, guideline_id, page)
   - Copy exact numbers, dosages, and thresholds from the image
   - Keep all fields even if empty (use [] for arrays, "" for strings)
-  - Multiple items of the same or different content_type on one page is expected
-  - For logic_connections type, use escalation for urgent/emergency situations (NOT emergency)
-  - Copy cross-reference markers exactly as they appear - do not interpret them
+  - Every chunk with a medical intervention MUST populate implementation_notes (inject footnotes or describe procedure from text)
+  - Output cross-reference markers ONLY in cross_references array, strip from all other text fields
 
-cross_reference_rules:
-  - Add reference markers to cross_references array (e.g., ["-> 16", "-> 19", "1", "2"])
-  - REMOVE reference markers from the main text fields (protocol.treat, signs_symptoms, etc.)
-  - Example - BAD: "If decreased consciousness -> 16, give dextrose"
-  - "Example - GOOD: text cleaned, then add to cross_references array separately"
-  - This prevents duplication and makes references machine-parseable
+v3_logic_mapping_rules:
+  - For clinical_pathway chunks, populate pathway_logic with structured IF/THEN branches
+  - CRITICAL - Capture BOTH positive AND negative branches (Yes AND No paths)
+  - If a branch leads to "no further action", use then_action "Routine care" or "Exit pathway"
+  - Each decision point should be a separate pathway_logic entry
+  - Example - If glucose < 3 and alert is one entry, If glucose < 3 and unconscious is another entry
+  - Capture the COMPLETE logic tree, not just linear steps
+  - Map numeric thresholds precisely using range_metadata for machine filtering
 
-logic_connections_rules:
-  - trigger: The condition that activates the connection (copy exact text)
-  - target: Use page reference if available (e.g., "page 16", "-> 19"), otherwise use the destination title
-  - type: Use "escalation" for emergencies, "follow_up" for routine next steps, "alternate_pathway" for OR branches
-  - Example: {"trigger": "decreased consciousness", "target": "page 16", "type": "escalation"}
-  - Example: {"trigger": "glucose 3-6", "target": "Risk factor assessment", "type": "follow_up"}
+v3_footnote_injection_rules:
+  - CRITICAL: Find all superscript markers (¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹, *, †, ‡) in the main content
+  - Match each marker to its footnote text at the page bottom
+  - INJECT the footnote into implementation_notes of the relevant chunk
+  - Format: "Footnote 1: [exact footnote text from page bottom]"
+  - If a footnote applies to multiple chunks, inject it into each relevant chunk
+  - Do NOT create separate generic chunks for footnotes (unless orphaned with no parent)
+  - Clean the main text by keeping markers in cross_references array only
+
+v3_exit_point_rules:
+  - Extract all "→ Page X" or "See page Y" markers as exit_points
+  - Format: {condition: "Decreased consciousness", target: "page 16"}
+  - The condition should describe WHEN to follow this exit
+  - Common exit targets: specific pages, "Hospital referral", "ICU", "Specialist review"
+  - Exit points represent care escalation or pathway transitions
+
 
 example:
   - content_type: clinical_pathway
-    pathway_type: screening
-    topic: Diabetes Screening
-    specific_scenario: Prediabetes detected
+    pathway_type: treatment
+    topic: Hypoglycemia Management
+    specific_scenario: Random glucose < 3 mmol/L
     visual_structure: flowchart_path
-    urgency: routine
+    urgency: emergency
     prescriber_level: doctor
     clinical_criteria:
       conditions:
-        - Fasting glucose 5.6-6.9 mmol/L
-      emergency_triggers: []
+        - Random glucose < 3 mmol/L
+      emergency_triggers:
+        - Decreased consciousness
+        - Fitting/convulsions
     protocol:
       assess:
-        - Measure BMI
-      treat: []
+        - Check glucose level
+        - Assess consciousness level
+        - Check for ability to swallow
+      treat:
+        - Give sugar water if alert
+        - Give IV dextrose if unconscious
       advise:
-        - Lifestyle modification counseling
-    logic_connections: []
-    cross_references: []
-    disposition: Home with annual follow-up
+        - Recheck glucose after treatment
+    pathway_logic:
+      - if_condition: "Glucose < 3 and patient alert and able to swallow"
+        then_action: "Give 3 teaspoons sugar in 1 cup water"
+        next_step: "Recheck glucose after 15 minutes"
+      - if_condition: "Glucose < 3 and decreased consciousness or unable to swallow"
+        then_action: "Give Dextrose 10% 5mL/kg IV over 5 minutes"
+        next_step: "Emergency protocol -> Page 16"
+      - if_condition: "Glucose still < 3 after first treatment"
+        then_action: "Repeat treatment and refer to hospital"
+        next_step: "Hospital referral"
+    implementation_notes:
+      - "Footnote 1: Sugar water = 15g sugar (3 teaspoons) in 200mL water (1 cup)"
+      - "Footnote 2: If Dextrose 10% unavailable, dilute Dextrose 50% (mix 1 part 50% + 4 parts water for injection)"
+      - "Dosing: 5mL/kg IV bolus, give slowly over 5 minutes"
+      - "Monitor for signs of dehydration: poor skin turgor, BP < 90/60, pulse > 110"
+    exit_points:
+      - condition: "Decreased consciousness"
+        target: "page 16"
+      - condition: "Fitting or convulsions"
+        target: "page 19"
+      - condition: "Persistent hypoglycemia after 2 treatments"
+        target: "Hospital referral"
+    cross_references:
+      - "-> 16"
+      - "-> 19"
+      - "1"
+      - "2"
+    disposition: "Monitor glucose and symptoms, refer if no improvement"
   - content_type: warning_signs
-    topic: Fever in Children
-    condition_context: Febrile illness
+    topic: Severe Malaria
+    condition_context: Life-threatening malaria complications
     urgency: emergency
-    signs_symptoms:
-      - Temperature 40C or higher
-      - Stiff neck
-      - Bulging fontanelle
-      - Unable to drink or breastfeed
-      - Convulsions
-      - Severe lethargy
-    immediate_actions:
-      - Give first dose of antibiotics
-      - Refer urgently to hospital
+    triggers:
+      - Decreased consciousness (GCS < 15)
+      - Respiratory distress with tachypnea
+      - Multiple convulsions within 24 hours
+      - Prostration
+      - Severe anemia (Hb < 5 g/dL)
+      - Jaundice with renal impairment
+    immediate_steps:
+      - Administer IV artesunate 2.4 mg/kg immediately
+      - Check glucose and give dextrose if < 3 mmol/L
+      - Establish IV access and start fluids
+      - Refer to hospital emergency department within 1 hour
+    safety_checks:
+      - Do not give IV fluids rapidly (risk of pulmonary edema)
+      - Avoid quinine if patient has taken mefloquine in past 24 hours
+      - Monitor glucose hourly (risk of hypoglycemia with severe malaria)
     referral_required: true
-    referral_destination: Hospital emergency department
-    timeframe: Immediately
-    cross_references: []
+    referral_destination: Hospital emergency department with ICU capability
+    timeframe: Within 1 hour
+    cross_references:
+      - "-> 45"
+      - "-> 16"
   - content_type: patient_education
     topic: Fever Management
     target_audience: caregiver
@@ -436,12 +550,46 @@ example:
   - content_type: generic
     topic: Glucose Management
     section_type: page_notes
-    summary: Footnotes explaining preparation instructions and definitions
+    summary: Orphaned footnotes with no specific parent chunk
     key_points:
-      - "1: Glucose solution - Three teaspoons sugar (15g) in 1 cup (200mL) water"
-      - "2: Dextrose 10% - If unavailable, dilute dextrose 50% (10mL dextrose 50% + 40mL water)"
-      - "3: Insulin infusion - Start at 0.1 units/kg/hour"
-      - "4: BMI = Body Mass Index"
-      - "5: CVD = Cardiovascular Disease"
+      - "5: BMI = Body Mass Index"
+      - "6: CVD = Cardiovascular Disease"
     cross_references: []
-    raw_text: ""
+    raw_text: "Note: Only create generic chunks for orphaned footnotes. Most footnotes should be injected into relevant clinical_pathway or warning_signs chunks via implementation_notes or safety_checks."
+
+medical_accuracy_rules:
+  - CRITICAL - Verify clinical terms are transcribed correctly
+  - Watch for OCR errors - skin turgor NOT skin tumour
+  - Route precision - IM (intramuscular) vs IV (intravenous) are NOT interchangeable
+  - Units - mmol/L vs mg/dL, preserve exact units
+  - BP format - use forward slash (BP < 90/60 NOT BP < 90-60)
+  - Numeric precision - copy exactly and extract to range_metadata (< 3 vs ≤ 3 matters for boundaries)
+  - If flowchart shows Yes/No branches, create separate pathway_logic entries for BOTH branches
+  - Do not combine OR conditions into single entries, split them
+  - Example BAD - If glucose < 3 or patient unconscious, give dextrose
+  - Example GOOD - Two entries, If glucose < 3 and alert then sugar water, If glucose < 3 and unconscious then IV dextrose
+
+range_boundary_rules:
+  - For any numeric threshold, populate range_metadata with explicit boundaries
+  - Use null for unbounded ends (e.g., glucose < 3 has max_value 3.0, min_value null)
+  - Set inclusive flags based on symbols - < means inclusive_max false, ≤ means inclusive_max true
+  - Example for "glucose 3-6" - min_value 3.0 (inclusive_min true), max_value 6.0 (inclusive_max true)
+  - This allows code to filter "glucose = 3.0" to correct chunk without LLM ambiguity
+
+negative_branch_rules:
+  - Every Yes/No decision point MUST have entries for both branches
+  - If No branch means "stop" or "routine care", create explicit entry with then_action "Routine care" or "Exit pathway"
+  - Example - If BMI < 25 then "Exit pathway - no diabetes risk screening needed"
+  - This prevents RAG from being "silent" when user asks about healthy patients
+
+global_exclusion_rules:
+  - Scan page for global warnings (usually small text at bottom or in margins)
+  - Common patterns - "Not for pregnant women", "Age < 18 only", "Exclude if on insulin"
+  - Append these to specific_scenario field of EVERY chunk on that page
+  - This prevents dangerous misapplication of protocols to excluded populations
+
+visual_hierarchy_priority:
+  - If page contains warning_signs (red box), it has HIGHEST priority
+  - All clinical_pathway chunks on same page must include exit_point or logic that checks emergency triggers first
+  - Example - If glucose pathway and severe hypoglycemia warning on same page, pathway must reference warning
+  - This ensures emergency content is never buried or skipped

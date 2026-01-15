@@ -7,6 +7,14 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class RedFlag(BaseModel):
+    """Structured red flag trigger for patient alerting."""
+
+    symptom: str = Field(..., description="The warning symptom or sign")
+    action: str = Field(..., description="What patient should do (e.g., 'Call doctor immediately', 'Go to ER')")
+    timeframe: str = Field(default="", description="How quickly to act")
+
+
 class PatientEducation(BaseModel):
     """Patient and caregiver education content.
     
@@ -35,9 +43,13 @@ class PatientEducation(BaseModel):
         default_factory=list,
         description="Step-by-step instructions if applicable",
     )
+    red_flags: list[RedFlag] = Field(
+        default_factory=list,
+        description="Structured 'call doctor if...' triggers for patient alerts",
+    )
     when_to_seek_care: list[str] = Field(
         default_factory=list,
-        description="Symptoms or situations requiring return to clinic",
+        description="Symptoms or situations requiring return to clinic (legacy field, prefer red_flags)",
     )
     things_to_avoid: list[str] = Field(
         default_factory=list,

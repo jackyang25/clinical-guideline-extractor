@@ -6,7 +6,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from extraction.llm.client import AnthropicVisionClient
+from extraction.llm.client import VisionClient
 from extraction.llm.parsers import strip_json_fence
 from extraction.processors.pdf import PageImage
 from schemas.metadata_extraction.models import GuidelineMetadataExtraction
@@ -14,7 +14,7 @@ from schemas.metadata_models import GuidelineInfo
 
 
 async def extract_metadata_async(
-    first_page: PageImage, client: AnthropicVisionClient
+    first_page: PageImage, client: VisionClient
 ) -> GuidelineMetadataExtraction:
     """Extract guideline metadata from the first page."""
     

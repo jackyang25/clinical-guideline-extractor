@@ -12,7 +12,7 @@ import streamlit as st
 
 from schemas.base_models import HumanAudit
 from extraction.formatters import format_flat_chunks, wrap_guideline_output, wrap_page_output
-from extraction.llm.client import AnthropicVisionClient
+from extraction.llm.client import VisionClient
 from extraction.metadata_extractor import extract_metadata, metadata_to_guideline_info
 from extraction.pipeline import process_pages
 from extraction.processors.pdf import render_pdf_bytes
@@ -21,25 +21,42 @@ from extraction.utils import ensure_dir, write_json
 
 # pricing per million tokens (USD)
 MODEL_PRICING = {
+    # Anthropic Claude
     "claude-3-5-haiku-20241022": {
         "input": 0.80,
         "output": 4.00,
+        "provider": "anthropic",
     },
     "claude-3-5-sonnet-20241022": {
         "input": 3.00,
         "output": 15.00,
+        "provider": "anthropic",
     },
     "claude-sonnet-4-20250514": {
         "input": 3.00,
         "output": 15.00,
+        "provider": "anthropic",
     },
     "claude-opus-4-20250514": {
         "input": 15.00,
         "output": 75.00,
+        "provider": "anthropic",
     },
     "claude-opus-4-1-20250805": {
         "input": 15.00,
         "output": 75.00,
+        "provider": "anthropic",
+    },
+    # OpenAI GPT
+    "gpt-4o": {
+        "input": 2.50,
+        "output": 10.00,
+        "provider": "openai",
+    },
+    "gpt-4o-mini": {
+        "input": 0.15,
+        "output": 0.60,
+        "provider": "openai",
     },
 }
 
@@ -124,21 +141,57 @@ def main() -> None:
         return
 
     st.subheader("Vision settings")
-    api_key = st.text_input(
-        "Anthropic API key",
-        type="password",
-        value=os.getenv("ANTHROPIC_API_KEY", ""),
-        help="Add your API key to enable extraction.",
+    
+    # Provider selection
+    provider = st.radio(
+        "Provider",
+        options=["Anthropic (Claude)", "OpenAI (GPT)"],
+        horizontal=True,
+        help="Claude: 5MB image limit. GPT: 20MB image limit (supports higher DPI).",
     )
-    model_name = st.selectbox(
-        "Model name",
-        options=[
+    
+    # API key and DPI limits based on provider
+    if provider == "Anthropic (Claude)":
+        api_key = st.text_input(
+            "Anthropic API key",
+            type="password",
+            value=os.getenv("ANTHROPIC_API_KEY", ""),
+            help="Add your Anthropic API key to enable extraction.",
+        )
+        model_options = [
             "claude-sonnet-4-20250514",
             "claude-3-5-sonnet-20241022",
             "claude-3-5-haiku-20241022",
-        ],
-        index=0,
-        help="Sonnet 4: Best quality. Sonnet 3.5: Good balance. Haiku: Fastest and cheapest.",
+        ]
+        default_index = 0
+        model_help = "Sonnet 4: Best quality. Sonnet 3.5: Good balance. Haiku: Fastest and cheapest."
+        # Claude has 5MB limit, so use conservative DPI
+        max_dpi = 250
+        default_dpi = 200
+        dpi_help = "Max 250 DPI due to Claude's 5MB image limit. 200 DPI provides excellent quality for most guidelines."
+    else:
+        api_key = st.text_input(
+            "OpenAI API key",
+            type="password",
+            value=os.getenv("OPENAI_API_KEY", ""),
+            help="Add your OpenAI API key to enable extraction.",
+        )
+        model_options = [
+            "gpt-4o",
+            "gpt-4o-mini",
+        ]
+        default_index = 0
+        model_help = "GPT-4o: Best quality, handles large images (20MB). GPT-4o-mini: Very fast and cheap."
+        # GPT has 20MB limit, so can use higher DPI
+        max_dpi = 400
+        default_dpi = 300
+        dpi_help = "Max 400 DPI with GPT's 20MB limit. 300 DPI recommended for maximum quality without excessive tokens."
+    
+    model_name = st.selectbox(
+        "Model name",
+        options=model_options,
+        index=default_index,
+        help=model_help,
     )
     max_tokens = st.number_input(
         "Max tokens",
@@ -157,9 +210,9 @@ def main() -> None:
     dpi = st.number_input(
         "Render DPI",
         min_value=100,
-        max_value=400,
-        value=400,
-        help="Image resolution for PDF rendering. Higher DPI improves text clarity but increases image size and tokens. 400 provides maximum quality for accurate extraction.",
+        max_value=max_dpi,
+        value=default_dpi,
+        help=dpi_help,
     )
 
     created_by = st.text_input(
@@ -205,7 +258,8 @@ def main() -> None:
 
             # step 1: extract metadata from first page
             metadata_status = st.info("Step 1/2: Extracting metadata from first page...")
-            metadata_client = AnthropicVisionClient(api_key, model_name, max_tokens=1000)
+            provider_id = "anthropic" if "Claude" in provider else "openai"
+            metadata_client = VisionClient(api_key, model_name, max_tokens=1000, provider=provider_id)
             first_page = render_pdf_bytes(pdf.content, dpi=150)[0]  # lower DPI for speed
             auto_metadata = extract_metadata(first_page, metadata_client)
             guideline_info = metadata_to_guideline_info(auto_metadata, regulatory_status="draft")
@@ -225,10 +279,11 @@ def main() -> None:
                 progress.progress(current / total, text=f"Completed {current} of {total} pages")
                 status.info(f"{current} completed | {total - current} remaining")
 
-            client = AnthropicVisionClient(
+            client = VisionClient(
                 api_key=api_key,
                 model=model_name,
                 max_tokens=int(max_tokens),
+                provider=provider_id,
             )
             page_outputs = process_pages(
                 pages=pages,

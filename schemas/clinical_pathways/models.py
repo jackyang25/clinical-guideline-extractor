@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -22,19 +22,44 @@ class Protocol(BaseModel):
     advise: list[str] = Field(default_factory=list)
 
 
-class LogicConnection(BaseModel):
-    """Link to another section or page."""
+class NumericRange(BaseModel):
+    """Numeric range with explicit boundaries for clinical thresholds."""
 
-    trigger: str
-    target: str
-    type: Literal[
-        "escalation",
-        "comorbidity",
-        "differential_diagnosis",
-        "follow_up",
-        "alternate_pathway",
-        "prerequisite",
-    ]
+    parameter: str = Field(..., description="What is being measured (e.g., 'glucose', 'BP systolic')")
+    min_value: Optional[float] = Field(default=None, description="Minimum value (null if unbounded below)")
+    max_value: Optional[float] = Field(default=None, description="Maximum value (null if unbounded above)")
+    inclusive_min: bool = Field(default=True, description="Whether min is inclusive (≥ vs >)")
+    inclusive_max: bool = Field(default=True, description="Whether max is inclusive (≤ vs <)")
+    unit: str = Field(..., description="Unit of measurement (e.g., 'mmol/L', 'mmHg')")
+
+
+class PathwayLogic(BaseModel):
+    """Structured if/then logic for clinical decision-making.
+    
+    CRITICAL: Capture BOTH positive and negative branches. 
+    If a branch leads to 'no action', use then_action: 'Routine care' or 'Exit pathway'.
+    """
+
+    if_condition: str = Field(
+        ..., description="The clinical condition or patient state that triggers this action"
+    )
+    then_action: str = Field(
+        ..., description="The specific medical action or intervention to take (use 'Routine care' or 'Exit pathway' for negative branches)"
+    )
+    next_step: str = Field(
+        default="", description="What happens next (e.g., recheck in 15 min, refer to page 16)"
+    )
+
+
+class ExitPoint(BaseModel):
+    """Navigation point to another section, page, or escalation path."""
+
+    condition: str = Field(
+        ..., description="The trigger condition that activates this exit"
+    )
+    target: str = Field(
+        ..., description="Where to go (e.g., 'page 16', 'Hospital referral', 'ICU')"
+    )
 
 
 class ClinicalPathway(BaseModel):
@@ -50,7 +75,14 @@ class ClinicalPathway(BaseModel):
         "mixed",
     ] = Field(..., description="Primary purpose of this pathway")
     topic: str = Field(..., description="Clinical topic or subject")
-    specific_scenario: str
+    specific_scenario: str = Field(
+        ..., 
+        description="The specific patient situation. If global exclusions exist on page (e.g., 'Not for pregnant women'), append them here."
+    )
+    range_metadata: list[NumericRange] = Field(
+        default_factory=list,
+        description="Explicit numeric ranges with boundaries for machine filtering (e.g., glucose thresholds)",
+    )
     visual_structure: Literal[
         "flowchart_path",
         "routine_care_table",
@@ -67,7 +99,18 @@ class ClinicalPathway(BaseModel):
     ]
     clinical_criteria: ClinicalCriteria
     protocol: Protocol
-    logic_connections: list[LogicConnection] = Field(default_factory=list)
+    pathway_logic: list[PathwayLogic] = Field(
+        default_factory=list,
+        description="Structured if/then decision logic for clinical reasoning (v3.0 enhancement)",
+    )
+    implementation_notes: list[str] = Field(
+        default_factory=list,
+        description="Step-by-step how-to instructions, including injected footnote details (e.g., drug preparation, dosing calculations)",
+    )
+    exit_points: list[ExitPoint] = Field(
+        default_factory=list,
+        description="Navigation points where patient care escalates or transitions to another pathway",
+    )
     cross_references: list[str] = Field(
         default_factory=list,
         description="Reference markers exactly as shown (e.g., '→ 19', '¹', '→ TB')",

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from extraction.llm.client import AnthropicVisionClient
+from extraction.llm.client import VisionClient
 from extraction.llm.parsers import (
     ExtractionError,
     build_prompt,
