@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY app.py /app/app.py
 COPY extraction /app/extraction
 COPY schemas /app/schemas
+COPY ui /app/ui
 
 EXPOSE 8501
 

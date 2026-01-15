@@ -11,6 +11,7 @@ services:
       - ./app.py:/app/app.py
       - ./extraction:/app/extraction
       - ./schemas:/app/schemas
+      - ./ui:/app/ui
       - ./output:/app/output
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
