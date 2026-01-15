@@ -130,10 +130,15 @@ def main() -> None:
         value=os.getenv("ANTHROPIC_API_KEY", ""),
         help="Add your API key to enable extraction.",
     )
-    model_name = st.text_input(
+    model_name = st.selectbox(
         "Model name",
-        value="claude-sonnet-4-20250514",
-        help="Popular models: claude-sonnet-4-20250514, claude-3-5-haiku-20241022 (faster), claude-opus-4-20250514 (best)",
+        options=[
+            "claude-sonnet-4-20250514",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
+        ],
+        index=0,
+        help="Sonnet 4: Best quality. Sonnet 3.5: Good balance. Haiku: Fastest and cheapest.",
     )
     max_tokens = st.number_input(
         "Max tokens",
@@ -145,9 +150,9 @@ def main() -> None:
     batch_size = st.number_input(
         "Batch size",
         min_value=1,
-        max_value=20,
-        value=5,
-        help="Number of pages to process in parallel. Higher = faster but more API load.",
+        max_value=100,
+        value=10,
+        help="Number of pages to process in parallel. Higher = faster but more API load. Enterprise accounts can use very high values (50-100).",
     )
     dpi = st.number_input(
         "Render DPI",
@@ -425,8 +430,19 @@ def main() -> None:
             summary_parts = [f"{count} {ctype.replace('_', ' ')}" for ctype, count in sorted(content_type_counts.items())]
             st.caption(f"Total items: {len(all_items_flat)} ({', '.join(summary_parts)})")
             
+            # cap preview to avoid frontend lag
+            PREVIEW_PAGE_LIMIT = 10
+            total_pages = len(pages_dict)
+            sorted_pages = sorted(pages_dict.keys())
+            
+            if total_pages > PREVIEW_PAGE_LIMIT:
+                st.info(f"Preview shows first {PREVIEW_PAGE_LIMIT} pages only. Download JSON files for all {total_pages} pages.")
+                pages_to_display = sorted_pages[:PREVIEW_PAGE_LIMIT]
+            else:
+                pages_to_display = sorted_pages
+            
             # display grouped by page
-            for page_num in sorted(pages_dict.keys()):
+            for page_num in pages_to_display:
                 items = pages_dict[page_num]
                 with st.expander(f"Page {page_num} ({len(items)} item{'s' if len(items) != 1 else ''})"):
                     for idx, item in enumerate(items, start=1):
