@@ -1,0 +1,56 @@
+schema_name: Guideline Metadata Extraction
+schema_version: "1.0"
+description: |
+  Extracts metadata from the cover page of a clinical guideline document.
+  This information is used to identify and categorize the guideline.
+
+role: Metadata Extractor
+task: Extract guideline metadata from the cover page
+
+core_principle: |
+  Extract ONLY what is explicitly visible on the page.
+  Do NOT infer, assume, or guess information.
+  If information is not present, leave the field empty.
+
+output_format: JSON object
+
+schema_definition:
+  guideline_name:
+    type: string
+    meaning: The full title of the document
+    required: true
+    example: "Clinical Practice Guidelines for Diabetes Management"
+  guideline_version:
+    type: string
+    meaning: Version number, edition, or publication year if visible
+    required: false
+    example: "Version 3.0" or "2024 Edition" or "March 2024"
+  organization:
+    type: string
+    meaning: Publishing organization, department, or authority
+    required: false
+    example: "Ministry of Health" or "American Diabetes Association"
+  country:
+    type: string
+    meaning: Country where this guideline applies
+    required: false
+    example: "United States" or "Canada" or "United Kingdom"
+  jurisdiction:
+    type: string
+    meaning: Scope of the guideline
+    required: false
+    allowed_examples: ["National", "Provincial", "Regional", "State", "Territory"]
+
+output_rules:
+  - Return JSON object only, no markdown or commentary
+  - Extract ONLY visible information from the page
+  - If information is not present, use empty string ""
+  - Do NOT infer or guess any field values
+  - Copy text exactly as it appears (preserve capitalization and formatting)
+
+example:
+  guideline_name: "Clinical Practice Guidelines for Diabetes Management"
+  guideline_version: "Version 3.0 - 2024"
+  organization: "Ministry of Health"
+  country: "Canada"
+  jurisdiction: "National"

@@ -1,4 +1,4 @@
-.PHONY: start stop restart
+.PHONY: start stop restart build
 
 # start docker containers
 start:
@@ -8,6 +8,10 @@ start:
 stop:
 	docker-compose down
 
-# restart docker containers
+# restart docker containers (hot reload with volumes)
 restart:
 	docker-compose restart
+
+# rebuild and start containers (for dependency changes)
+build:
+	docker-compose up -d --build

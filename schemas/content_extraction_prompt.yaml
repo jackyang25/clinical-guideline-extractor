@@ -1,9 +1,9 @@
-schema_name: Multi-Schema Clinical Content Extraction
+schema_name: Clinical Content Chunk Extraction
 schema_version: "2.0"
 description: |
-  Extracts mixed clinical content from guideline pages using appropriate schemas.
+  Extracts content chunks from guideline pages using multiple schemas.
   The LLM auto-detects content types and applies the matching extraction schema.
-  Multiple content types can exist on a single page.
+  Multiple content chunks can exist on a single page.
 
 role: Clinical Data Architect
 task: Identify and extract all clinical content from a guideline page using appropriate schemas
@@ -97,10 +97,17 @@ schema_definitions:
         advise: {type: array of strings}
     logic_connections:
       type: array of objects
+      meaning: Links to other sections or escalation paths
       fields:
-        trigger: {type: string}
-        target: {type: string}
-        type: {type: enum, values: [comorbidity, escalation, differential_diagnosis]}
+        trigger: {type: string, meaning: "Condition that activates this connection"}
+        target: {type: string, meaning: "Where the patient goes next"}
+        type:
+          type: enum
+          values: [comorbidity, escalation, differential_diagnosis]
+          descriptions:
+            escalation: "Requires higher level of care, urgent action, or specialist referral"
+            comorbidity: "Patient has multiple conditions affecting management"
+            differential_diagnosis: "Symptoms could indicate different diagnoses"
     disposition:
       type: string
       required: true
@@ -214,6 +221,7 @@ output_rules:
   - Copy exact numbers, dosages, and thresholds from the image
   - Keep all fields even if empty (use [] for arrays, "" for strings)
   - Multiple items of the same or different content_type on one page is expected
+  - For logic_connections type, use "escalation" for urgent/emergency situations (NOT "emergency")
 
 example:
   - content_type: "clinical_pathway"

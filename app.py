@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import streamlit as st
 from schemas.base_models import GuidelineInfo, HumanAudit
 from extraction.formatters import wrap_guideline_output, wrap_page_output
 from extraction.llm.client import AnthropicVisionClient
+from extraction.metadata_extractor import extract_metadata
 from extraction.pipeline import process_pages
 from extraction.processors.pdf import render_pdf_bytes
 from extraction.utils import ensure_dir, write_json
@@ -105,11 +107,11 @@ def _read_uploaded_pdf() -> UploadedPdf | None:
 
 def main() -> None:
     """Main Streamlit application."""
-    st.set_page_config(page_title="Clinical Vision Extractor", layout="centered")
+    st.set_page_config(page_title="Clinical Guideline Extractor", layout="centered")
     _load_dotenv(Path(__file__).resolve().parent / ".env")
 
-    st.title("Clinical vision extractor")
-    st.caption("Upload a PDF and extract structured clinical pathways.")
+    st.title("Clinical Guideline Extractor")
+    st.caption("Upload a PDF and extract structured clinical content.")
 
     try:
         pdf = _read_uploaded_pdf()
@@ -139,67 +141,15 @@ def main() -> None:
     )
     dpi = st.number_input("Render DPI", min_value=100, max_value=400, value=200)
 
-    st.subheader("Guideline metadata")
-    col1, col2 = st.columns(2)
-    with col1:
-        guideline_id = st.text_input(
-            "Guideline ID",
-            value="",
-            help="Unique identifier (e.g., apc2023, who2024_hiv)",
-            placeholder="e.g., apc2023",
-        )
-        guideline_name = st.text_input(
-            "Guideline name",
-            value="",
-            placeholder="e.g., APC Clinical Guidelines",
-        )
-        guideline_version = st.text_input(
-            "Version/Year",
-            value="",
-            placeholder="e.g., 2023",
-        )
-    with col2:
-        country = st.text_input(
-            "Country",
-            value="",
-            help="Country of jurisdiction",
-            placeholder="e.g., South Africa",
-        )
-        jurisdiction = st.text_input(
-            "Jurisdiction",
-            value="",
-            help="e.g., National, Provincial: Western Cape",
-            placeholder="e.g., National",
-        )
-        organization = st.text_input(
-            "Organization",
-            value="",
-            help="Publishing authority",
-            placeholder="e.g., Department of Health",
-        )
-    
-    regulatory_status = st.selectbox(
-        "Regulatory status",
-        options=["draft", "official", "guidance", "archived"],
-        index=0,  # default to "draft"
-    )
     created_by = st.text_input(
-        "Extracted by",
-        value=os.getenv("USER", "system"),
-        help="Your name or username",
+        "Your name/email",
+        value=os.getenv("USER", ""),
+        help="Who is running this extraction (e.g., your name or email)",
     )
 
-    st.subheader("Output settings")
-    default_output_dir = Path(__file__).resolve().parent / "clinical_knowledge_graph"
-    output_dir_input = st.text_input(
-        "Output folder",
-        value=str(default_output_dir),
-    )
-    prompt_path_input = st.text_input(
-        "Prompt file",
-        value=str(Path(__file__).resolve().parent / "schemas" / "unified_extraction_prompt.yaml"),
-        help="Uses multi-schema prompt that auto-detects content types (clinical_pathway, reference_table, drug_monograph, generic)",
-    )
+    # output settings (fixed paths)
+    output_dir = Path(__file__).resolve().parent / "output"
+    prompt_path = Path(__file__).resolve().parent / "schemas" / "content_extraction_prompt.yaml"
 
     if pdf is None:
         st.info("Choose a PDF to get started.")
@@ -213,6 +163,7 @@ def main() -> None:
             "sha256": pdf.sha256_hex,
         }
     )
+    st.caption("Output will be saved to: ./output/")
 
     if st.button("Run extraction", type="primary", use_container_width=True):
         if not api_key:
@@ -220,12 +171,32 @@ def main() -> None:
             return
 
         try:
-            output_dir = Path(output_dir_input).expanduser()
-            prompt_path = Path(prompt_path_input).expanduser()
             ensure_dir(output_dir)
+            
+            # clean up previous extraction outputs
+            for file in output_dir.glob("*"):
+                if file.is_file():
+                    file.unlink()
 
-            # render PDF pages first
-            init_status = st.info("Analyzing PDF...")
+            # step 1: extract metadata from first page
+            metadata_status = st.info("Step 1/2: Extracting metadata from first page...")
+            metadata_client = AnthropicVisionClient(api_key, model_name, max_tokens=1000)
+            first_page = render_pdf_bytes(pdf.content, dpi=150)[0]  # lower DPI for speed
+            auto_metadata = extract_metadata(first_page, metadata_client)
+            
+            # generate guideline info from metadata
+            guideline_id = auto_metadata.guideline_name.lower().replace(" ", "_")[:50]
+            guideline_name = auto_metadata.guideline_name
+            guideline_version = auto_metadata.guideline_version
+            country = auto_metadata.country
+            jurisdiction = auto_metadata.jurisdiction
+            organization = auto_metadata.organization
+            regulatory_status = "draft"
+            
+            metadata_status.success(f"Metadata extracted: {guideline_name} v{guideline_version}")
+            
+            # step 2: render PDF pages and extract content
+            init_status = st.info("Step 2/2: Rendering PDF pages...")
             pages = render_pdf_bytes(pdf.content, dpi=int(dpi))
             total_pages = len(pages)
             init_status.success(f"Starting extraction for {total_pages} pages (batch size: {int(batch_size)})")
@@ -322,7 +293,7 @@ def main() -> None:
         structured_path = output_dir / "guideline_structured.json"
         write_json(structured_path, full_output)
 
-        # calculate pages needing retry
+        # calculate pages needing retry and collect errors
         pages_needing_retry = [p["page_info"]["page_number"] for p in pages_wrapped if p["page_info"]["needs_retry"]]
         
         if pages_needing_retry:
@@ -331,6 +302,14 @@ def main() -> None:
                 f"Content items: {len(all_items_flat)}. "
                 f"Pages needing retry: {len(pages_needing_retry)} (pages {', '.join(map(str, pages_needing_retry))})"
             )
+            
+            # show validation errors
+            st.subheader("Validation Errors")
+            for output in page_outputs:
+                if output.validation_errors:
+                    with st.expander(f"Page {output.page_number} - {len(output.validation_errors)} error(s)"):
+                        for error in output.validation_errors:
+                            st.error(error)
         else:
             st.success(
                 f"Extraction complete. Pages: {len(page_outputs)}. "
@@ -367,24 +346,31 @@ def main() -> None:
             with st.expander("Supported models for cost estimation"):
                 st.text(supported_models)
         
-        st.write({"output_folder": str(output_dir)})
+        st.success("Files saved to: ./output/")
         
-        st.subheader("Guideline metadata")
-        meta_col1, meta_col2 = st.columns(2)
-        with meta_col1:
-            st.write({
-                "Guideline ID": guideline_info.guideline_id,
-                "Name": guideline_info.guideline_name,
-                "Version": guideline_info.guideline_version,
-                "Approval Status": guideline_audit.status,
-            })
-        with meta_col2:
-            st.write({
-                "Country": guideline_info.country,
-                "Jurisdiction": guideline_info.jurisdiction,
-                "Organization": guideline_info.organization,
-                "Regulatory Status": guideline_info.regulatory_status,
-            })
+        st.subheader("Extraction metadata")
+        
+        st.caption("GuidelineInfo")
+        st.json({
+            "guideline_id": guideline_info.guideline_id,
+            "guideline_name": guideline_info.guideline_name,
+            "guideline_version": guideline_info.guideline_version,
+            "country": guideline_info.country,
+            "jurisdiction": guideline_info.jurisdiction,
+            "organization": guideline_info.organization,
+            "regulatory_status": guideline_info.regulatory_status,
+        })
+        
+        st.caption("HumanAudit")
+        st.json({
+            "status": guideline_audit.status,
+            "version": guideline_audit.version,
+            "created_at": guideline_audit.created_at,
+            "created_by": guideline_audit.created_by,
+            "reviewed_by": guideline_audit.reviewed_by,
+            "approval_date": guideline_audit.approval_date,
+            "notes": guideline_audit.notes,
+        })
         
         col_dl1, col_dl2 = st.columns(2)
         with col_dl1:

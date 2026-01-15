@@ -67,3 +67,6 @@ dmypy.json
 # Logs
 logs/
 *.log
+
+# Output
+output/
