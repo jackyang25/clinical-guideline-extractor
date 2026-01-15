@@ -87,7 +87,7 @@ def _read_uploaded_pdf() -> UploadedPdf | None:
     uploaded = st.file_uploader(
         "Upload a PDF",
         type=["pdf"],
-        help="Upload a PDF. The conversion step is a placeholder for now.",
+        help="Upload a clinical guideline PDF. Each page will be rendered as an image and processed by the vision model.",
     )
     if uploaded is None:
         return None
@@ -111,7 +111,7 @@ def main() -> None:
     _load_dotenv(Path(__file__).resolve().parent / ".env")
 
     st.title("Clinical Guideline Extractor")
-    st.caption("Upload a PDF and extract structured clinical content.")
+    st.caption("Extracts structured clinical content from PDFs using vision AI with predefined schemas. The model follows ontological definitions for pathways, drug monographs, and reference tables. AI-extracted content requires human review before clinical use.")
 
     try:
         pdf = _read_uploaded_pdf()
@@ -131,7 +131,13 @@ def main() -> None:
         value="claude-sonnet-4-20250514",
         help="Popular models: claude-sonnet-4-20250514, claude-3-5-haiku-20241022 (faster), claude-opus-4-20250514 (best)",
     )
-    max_tokens = st.number_input("Max tokens", min_value=256, max_value=16384, value=4000)
+    max_tokens = st.number_input(
+        "Max tokens",
+        min_value=256,
+        max_value=16384,
+        value=4000,
+        help="Maximum tokens for model response. Higher allows more complex extractions but increases cost. 4000 is usually sufficient per page.",
+    )
     batch_size = st.number_input(
         "Batch size",
         min_value=1,
@@ -139,7 +145,13 @@ def main() -> None:
         value=5,
         help="Number of pages to process in parallel. Higher = faster but more API load.",
     )
-    dpi = st.number_input("Render DPI", min_value=100, max_value=400, value=200)
+    dpi = st.number_input(
+        "Render DPI",
+        min_value=100,
+        max_value=400,
+        value=200,
+        help="Image resolution for PDF rendering. Higher DPI improves text clarity but increases image size and tokens. 200 balances quality and cost.",
+    )
 
     created_by = st.text_input(
         "Your name/email",
@@ -163,7 +175,7 @@ def main() -> None:
             "sha256": pdf.sha256_hex,
         }
     )
-    st.caption("Output will be saved to: ./output/")
+    st.caption("SHA-256 hash enables file version tracking. Output will be saved to: ./output/")
 
     if st.button("Run extraction", type="primary", use_container_width=True):
         if not api_key:
@@ -380,7 +392,7 @@ def main() -> None:
                 file_name="guideline_chunks_flat.json",
                 mime="application/json",
                 use_container_width=True,
-                help="Array of self-contained chunks with denormalized guideline info (for RAG/database import)",
+                help="Array of self-contained chunks with denormalized guideline info. Each chunk includes full context. Use for RAG systems or database import.",
             )
         with col_dl2:
             st.download_button(
@@ -389,7 +401,7 @@ def main() -> None:
                 file_name="guideline_with_metadata.json",
                 mime="application/json",
                 use_container_width=True,
-                help="Full hierarchical structure: guideline → pages → chunks with all metadata",
+                help="Full hierarchical structure: guideline → pages → chunks. Includes all metadata and preserves document structure. Use for rendering complete guidelines.",
             )
 
         st.subheader("Extracted content")
