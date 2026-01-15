@@ -30,7 +30,7 @@ class LogicConnection(BaseModel):
     type: Literal["comorbidity", "escalation", "differential_diagnosis"]
 
 
-class ClinicalGuideline(BaseModel):
+class ClinicalPathway(BaseModel):
     """LLM-generated clinical pathway content (pure extraction, no system metadata)."""
 
     content_type: Literal["clinical_pathway"]

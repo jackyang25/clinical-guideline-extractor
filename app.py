@@ -286,11 +286,11 @@ def main() -> None:
         )
         
         # save flat chunks with full context (for RAG)
-        combined_path = output_dir / "clinical_guidelines_flat.json"
+        combined_path = output_dir / "guideline_chunks_flat.json"
         write_json(combined_path, all_items_flat)
         
         # save structured output with full metadata
-        structured_path = output_dir / "guideline_structured.json"
+        structured_path = output_dir / "guideline_with_metadata.json"
         write_json(structured_path, full_output)
 
         # calculate pages needing retry and collect errors
@@ -375,21 +375,21 @@ def main() -> None:
         col_dl1, col_dl2 = st.columns(2)
         with col_dl1:
             st.download_button(
-                "Download flat JSON (for RAG)",
+                "Download Chunks Only (Flat)",
                 data=combined_path.read_text(encoding="utf-8"),
-                file_name="clinical_guidelines_flat.json",
+                file_name="guideline_chunks_flat.json",
                 mime="application/json",
                 use_container_width=True,
-                help="Self-contained chunks with full context (chunk_id, guideline info, page, content)",
+                help="Array of self-contained chunks with denormalized guideline info (for RAG/database import)",
             )
         with col_dl2:
             st.download_button(
-                "Download structured JSON (with metadata)",
+                "Download Guideline with Metadata",
                 data=structured_path.read_text(encoding="utf-8"),
-                file_name="guideline_structured.json",
+                file_name="guideline_with_metadata.json",
                 mime="application/json",
                 use_container_width=True,
-                help="Full structure with guideline, page, and chunk metadata",
+                help="Full hierarchical structure: guideline → pages → chunks with all metadata",
             )
 
         st.subheader("Extracted content")

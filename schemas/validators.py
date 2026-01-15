@@ -6,13 +6,13 @@ from typing import Union
 
 from pydantic import ValidationError
 
-from schemas.clinical_pathways.models import ClinicalGuideline
+from schemas.clinical_pathways.models import ClinicalPathway
 from schemas.drug_monographs.models import DrugMonograph
 from schemas.generic.models import GenericContent
 from schemas.reference_tables.models import ReferenceTable
 
 # Discriminated union of all content types
-ClinicalContent = Union[ClinicalGuideline, ReferenceTable, DrugMonograph, GenericContent]
+ClinicalContent = Union[ClinicalPathway, ReferenceTable, DrugMonograph, GenericContent]
 
 
 def sanitize_payload(payload: dict) -> dict:
@@ -49,7 +49,7 @@ def validate_content(
             # Pydantic automatically dispatches to correct model based on content_type
             validated = None
             if content_type == "clinical_pathway":
-                validated = ClinicalGuideline.model_validate(sanitized)
+                validated = ClinicalPathway.model_validate(sanitized)
             elif content_type == "reference_table":
                 validated = ReferenceTable.model_validate(sanitized)
             elif content_type == "drug_monograph":
