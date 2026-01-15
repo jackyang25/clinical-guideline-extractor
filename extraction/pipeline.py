@@ -17,7 +17,7 @@ from extraction.llm.parsers import (
 )
 from extraction.processors.pdf import PageImage, render_pdf_bytes
 from extraction.utils import ensure_dir, write_json, write_text
-from schemas.clinical_pathways.validators import validate_guidelines
+from schemas.validators import validate_content
 from schemas.metadata_models import ChunkInfo, GuidelineInfo, HumanAudit
 
 
@@ -55,7 +55,7 @@ async def _process_page(
         parsed_items = []
 
     # validate and get sanitized items (audit fields stripped)
-    validated_items, validation_errors = validate_guidelines(parsed_items)
+    validated_items, validation_errors = validate_content(parsed_items)
     
     # all-or-nothing: if ANY chunk fails validation, discard entire page
     if validation_errors:

@@ -144,38 +144,44 @@ def main() -> None:
     with col1:
         guideline_id = st.text_input(
             "Guideline ID",
-            value="apc2023",
+            value="",
             help="Unique identifier (e.g., apc2023, who2024_hiv)",
+            placeholder="e.g., apc2023",
         )
         guideline_name = st.text_input(
             "Guideline name",
-            value="APC Clinical Guidelines",
+            value="",
+            placeholder="e.g., APC Clinical Guidelines",
         )
         guideline_version = st.text_input(
             "Version/Year",
-            value="2023",
+            value="",
+            placeholder="e.g., 2023",
         )
     with col2:
         country = st.text_input(
             "Country",
-            value="South Africa",
+            value="",
             help="Country of jurisdiction",
+            placeholder="e.g., South Africa",
         )
         jurisdiction = st.text_input(
             "Jurisdiction",
-            value="National",
+            value="",
             help="e.g., National, Provincial: Western Cape",
+            placeholder="e.g., National",
         )
         organization = st.text_input(
             "Organization",
-            value="Department of Health",
+            value="",
             help="Publishing authority",
+            placeholder="e.g., Department of Health",
         )
     
     regulatory_status = st.selectbox(
         "Regulatory status",
-        options=["official", "draft", "guidance", "archived"],
-        index=0,
+        options=["draft", "official", "guidance", "archived"],
+        index=0,  # default to "draft"
     )
     created_by = st.text_input(
         "Extracted by",
@@ -191,7 +197,8 @@ def main() -> None:
     )
     prompt_path_input = st.text_input(
         "Prompt file",
-        value=str(Path(__file__).resolve().parent / "schemas" / "clinical_pathways" / "prompt.yaml"),
+        value=str(Path(__file__).resolve().parent / "schemas" / "unified_extraction_prompt.yaml"),
+        help="Uses multi-schema prompt that auto-detects content types (clinical_pathway, reference_table, drug_monograph, generic)",
     )
 
     if pdf is None:
@@ -321,18 +328,21 @@ def main() -> None:
         if pages_needing_retry:
             st.warning(
                 f"Extraction complete with failures. Pages: {len(page_outputs)}. "
-                f"Pathways: {len(all_items_flat)}. "
+                f"Content items: {len(all_items_flat)}. "
                 f"Pages needing retry: {len(pages_needing_retry)} (pages {', '.join(map(str, pages_needing_retry))})"
             )
         else:
             st.success(
                 f"Extraction complete. Pages: {len(page_outputs)}. "
-                f"Pathways: {len(all_items_flat)}. All pages validated successfully."
+                f"Content items: {len(all_items_flat)}. All pages validated successfully."
             )
         
         st.subheader("API Usage Statistics")
         
         estimated_cost = calculate_cost(model_name, total_input_tokens, total_output_tokens)
+        
+        # debug info
+        st.caption(f"Model: {model_name} | Cost: {estimated_cost if estimated_cost is not None else 'None'}")
         
         if estimated_cost is not None:
             col1, col2, col3, col4, col5 = st.columns(5)
@@ -352,7 +362,10 @@ def main() -> None:
             with col5:
                 st.metric("Est. Cost (USD)", f"${estimated_cost:.4f}")
         else:
-            st.caption("Cost estimation unavailable for this model")
+            supported_models = ", ".join(MODEL_PRICING.keys())
+            st.caption(f"Cost estimation unavailable for {model_name}")
+            with st.expander("Supported models for cost estimation"):
+                st.text(supported_models)
         
         st.write({"output_folder": str(output_dir)})
         
@@ -393,29 +406,54 @@ def main() -> None:
                 help="Full structure with guideline, page, and chunk metadata",
             )
 
-        st.subheader("Extracted pathways")
+        st.subheader("Extracted content")
         if all_items_flat:
             # group by page number
             from collections import defaultdict
             pages_dict = defaultdict(list)
+            content_type_counts = defaultdict(int)
+            
             for item in all_items_flat:
                 page_num = item.get('page', 0)
                 pages_dict[page_num].append(item)
+                content_type = item.get('content', {}).get('content_type', 'unknown')
+                content_type_counts[content_type] += 1
+            
+            # show content type summary
+            summary_parts = [f"{count} {ctype.replace('_', ' ')}" for ctype, count in sorted(content_type_counts.items())]
+            st.caption(f"Total items: {len(all_items_flat)} ({', '.join(summary_parts)})")
             
             # display grouped by page
             for page_num in sorted(pages_dict.keys()):
-                pathways = pages_dict[page_num]
-                with st.expander(f"Page {page_num} ({len(pathways)} pathway{'s' if len(pathways) != 1 else ''})"):
-                    for idx, item in enumerate(pathways, start=1):
+                items = pages_dict[page_num]
+                with st.expander(f"Page {page_num} ({len(items)} item{'s' if len(items) != 1 else ''})"):
+                    for idx, item in enumerate(items, start=1):
                         content = item.get('content', {})
+                        content_type = content.get('content_type', 'unknown')
                         topic = content.get('topic', 'Unknown')
-                        scenario = content.get('specific_scenario', 'N/A')
-                        st.markdown(f"**Pathway {idx}: {topic} - {scenario}**")
+                        
+                        # build title based on content type
+                        if content_type == 'clinical_pathway':
+                            scenario = content.get('specific_scenario', '')
+                            title = f"**{idx}. [{content_type}] {topic} - {scenario}**"
+                        elif content_type == 'reference_table':
+                            table_name = content.get('table_name', '')
+                            title = f"**{idx}. [{content_type}] {topic}: {table_name}**"
+                        elif content_type == 'drug_monograph':
+                            drug_name = content.get('drug_name', '')
+                            title = f"**{idx}. [{content_type}] {drug_name}**"
+                        elif content_type == 'generic':
+                            section_type = content.get('section_type', '')
+                            title = f"**{idx}. [{content_type}] {topic} ({section_type})**"
+                        else:
+                            title = f"**{idx}. [{content_type}] {topic}**"
+                        
+                        st.markdown(title)
                         st.json(item)
-                        if idx < len(pathways):
+                        if idx < len(items):
                             st.divider()
         else:
-            st.warning("No pathways extracted.")
+            st.warning("No content extracted.")
 
 
 if __name__ == "__main__":

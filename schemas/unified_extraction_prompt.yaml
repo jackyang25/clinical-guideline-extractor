@@ -1,0 +1,251 @@
+schema_name: Multi-Schema Clinical Content Extraction
+schema_version: "2.0"
+description: |
+  Extracts mixed clinical content from guideline pages using appropriate schemas.
+  The LLM auto-detects content types and applies the matching extraction schema.
+  Multiple content types can exist on a single page.
+
+role: Clinical Data Architect
+task: Identify and extract all clinical content from a guideline page using appropriate schemas
+
+core_principle: |
+  Use ONLY visible text and visual cues from the screenshot.
+  Do NOT infer, assume, or add information.
+  Your job is to ORGANIZE existing content, not generate new content.
+  Choose the best-fitting schema for each piece of content.
+
+content_types:
+  clinical_pathway:
+    description: Decision trees, protocols, care pathways with IF/THEN logic
+    use_for:
+      - Flowcharts with decision points
+      - Step-by-step care protocols  
+      - Emergency/routine assessment tables with actions
+      - Conditional clinical pathways
+    avoid_for: Static reference tables, drug information, background text
+
+  reference_table:
+    description: Structured lookup tables and classification systems
+    use_for:
+      - Lab value reference ranges
+      - Vital sign norms by age
+      - Dosing charts without detailed instructions
+      - Classification/staging tables
+      - Risk scores or calculators
+    avoid_for: Protocols with actions, medication monographs
+
+  drug_monograph:
+    description: Detailed medication information
+    use_for:
+      - Drug profiles with dosing, contraindications, side effects
+      - Medication-specific guidance
+      - Formulary entries
+    avoid_for: Brief medication mentions in protocols, dosing tables
+
+  generic:
+    description: Fallback for unstructured content that doesn't fit above types
+    use_for:
+      - Background information and epidemiology
+      - Definitions and glossaries
+      - General clinical education content
+      - Appendices and references
+    use_when: No other schema fits well
+
+output_format: JSON array
+
+schema_definitions:
+  clinical_pathway:
+    content_type:
+      type: literal
+      value: "clinical_pathway"
+      required: true
+    topic:
+      type: string
+      meaning: The broad clinical subject
+      required: true
+    specific_scenario:
+      type: string
+      meaning: The specific patient situation
+      required: true
+    visual_structure:
+      type: enum
+      meaning: The visual format on the page
+      allowed_values:
+        - flowchart_path
+        - routine_care_table
+        - emergency_box
+        - general_info
+      required: true
+    urgency:
+      type: enum
+      allowed_values: [emergency, urgent, routine]
+      required: true
+    prescriber_level:
+      type: enum
+      allowed_values: [nurse, doctor, specialist, patient_self_care, not_applicable]
+      required: true
+    clinical_criteria:
+      type: object
+      fields:
+        conditions: {type: array of strings}
+        emergency_triggers: {type: array of strings}
+    protocol:
+      type: object
+      fields:
+        assess: {type: array of strings}
+        treat: {type: array of strings}
+        advise: {type: array of strings}
+    logic_connections:
+      type: array of objects
+      fields:
+        trigger: {type: string}
+        target: {type: string}
+        type: {type: enum, values: [comorbidity, escalation, differential_diagnosis]}
+    disposition:
+      type: string
+      required: true
+
+  reference_table:
+    content_type:
+      type: literal
+      value: "reference_table"
+      required: true
+    topic:
+      type: string
+      meaning: Clinical topic
+      required: true
+    table_name:
+      type: string
+      meaning: Name or title of the table
+      required: true
+    table_purpose:
+      type: string
+      meaning: What this table is used for
+      required: true
+    columns:
+      type: array of strings
+      meaning: Column headers in order
+    rows:
+      type: array of objects
+      meaning: Table data
+      fields:
+        key: {type: string, meaning: "Row identifier"}
+        values: {type: object, meaning: "Column to value mapping"}
+    units:
+      type: object
+      meaning: Units for numeric columns
+    notes:
+      type: array of strings
+      meaning: Important caveats or exceptions
+    source_reference:
+      type: string
+      meaning: Citation or source
+
+  drug_monograph:
+    content_type:
+      type: literal
+      value: "drug_monograph"
+      required: true
+    topic:
+      type: string
+      meaning: Clinical topic
+      required: true
+    drug_name:
+      type: string
+      meaning: Generic drug name
+      required: true
+    brand_names:
+      type: array of strings
+    drug_class:
+      type: string
+    indications:
+      type: array of strings
+    contraindications:
+      type: array of strings
+    dosing:
+      type: array of objects
+      fields:
+        route: {type: string}
+        dose: {type: string}
+        frequency: {type: string}
+        duration: {type: string}
+        special_populations: {type: string}
+    adverse_effects:
+      type: array of strings
+    drug_interactions:
+      type: array of strings
+    monitoring:
+      type: array of strings
+    pregnancy_category:
+      type: string
+    notes:
+      type: array of strings
+
+  generic:
+    content_type:
+      type: literal
+      value: "generic"
+      required: true
+    topic:
+      type: string
+      meaning: Clinical topic
+      required: true
+    section_type:
+      type: string
+      meaning: Type of content (e.g., background, epidemiology, definitions)
+      required: true
+    summary:
+      type: string
+      meaning: Brief 1-2 sentence summary
+      required: true
+    key_points:
+      type: array of strings
+      meaning: Main takeaways
+    raw_text:
+      type: string
+      meaning: Preserved original text
+
+output_rules:
+  - Return JSON array only, no markdown or commentary
+  - Each item MUST have a content_type field as its first field
+  - Choose the most appropriate content_type for each piece of content
+  - Extract ALL content from the page using appropriate schemas
+  - Do NOT include taxonomy fields (chunk_id, guideline_id, page) - these are system-managed
+  - Copy exact numbers, dosages, and thresholds from the image
+  - Keep all fields even if empty (use [] for arrays, "" for strings)
+  - Multiple items of the same or different content_type on one page is expected
+
+example:
+  - content_type: "clinical_pathway"
+    topic: "Diabetes Screening"
+    specific_scenario: "Prediabetes detected"
+    visual_structure: "flowchart_path"
+    urgency: "routine"
+    prescriber_level: "doctor"
+    clinical_criteria:
+      conditions:
+        - "Fasting glucose 5.6-6.9 mmol/L"
+      emergency_triggers: []
+    protocol:
+      assess:
+        - "Measure BMI"
+      treat: []
+      advise:
+        - "Lifestyle modification counseling"
+    logic_connections: []
+    disposition: "Home with annual follow-up"
+  - content_type: "reference_table"
+    topic: "Diabetes Screening"
+    table_name: "HbA1c Interpretation"
+    table_purpose: "Classification of glycemic status"
+    columns: ["HbA1c Range", "Interpretation"]
+    rows:
+      - key: "Normal"
+        values: {"HbA1c Range": "<5.7%", "Interpretation": "Normal glucose tolerance"}
+      - key: "Prediabetes"
+        values: {"HbA1c Range": "5.7-6.4%", "Interpretation": "Increased risk"}
+      - key: "Diabetes"
+        values: {"HbA1c Range": "≥6.5%", "Interpretation": "Diagnostic for diabetes"}
+    units: {}
+    notes: ["Confirm with repeat testing", "Point-of-care tests may vary"]
+    source_reference: ""

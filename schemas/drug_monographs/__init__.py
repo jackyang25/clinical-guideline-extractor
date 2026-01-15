@@ -1,0 +1,1 @@
+"""Drug monographs schema."""

@@ -33,9 +33,10 @@ class LogicConnection(BaseModel):
 class ClinicalGuideline(BaseModel):
     """LLM-generated clinical pathway content (pure extraction, no system metadata)."""
 
+    content_type: Literal["clinical_pathway"]
     topic: str = Field(..., description="Clinical topic or subject")
     specific_scenario: str
-    content_type: Literal[
+    visual_structure: Literal[
         "flowchart_path",
         "routine_care_table",
         "emergency_box",
