@@ -1,10 +1,37 @@
-"""Output formatting for hierarchical structure."""
+"""Output formatting for both flat and hierarchical structures."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from schemas.metadata_models import GuidelineInfo, HumanAudit, PageInfo
+
+
+def format_flat_chunks(
+    chunks: list[dict[str, Any]],
+    guideline_id: str,
+    guideline_name: str,
+    guideline_version: str,
+    page_number: int,
+) -> list[dict[str, Any]]:
+    """Format chunks as flat array with denormalized guideline info.
+    
+    Each chunk becomes self-contained with full context (guideline info, page number).
+    Use for RAG systems or database import.
+    """
+    flat_chunks = []
+    for chunk in chunks:
+        flat_chunk = {
+            "chunk_id": chunk["chunk_info"]["chunk_id"],
+            "guideline_id": guideline_id,
+            "guideline_name": guideline_name,
+            "guideline_version": guideline_version,
+            "page": page_number,
+            "content": chunk["content"],
+            "human_audit": chunk["human_audit"],
+        }
+        flat_chunks.append(flat_chunk)
+    return flat_chunks
 
 
 def wrap_page_output(

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 import streamlit as st
 
 from schemas.base_models import GuidelineInfo, HumanAudit
-from extraction.formatters import wrap_guideline_output, wrap_page_output
+from extraction.formatters import format_flat_chunks, wrap_guideline_output, wrap_page_output
 from extraction.llm.client import AnthropicVisionClient
 from extraction.metadata_extractor import extract_metadata
 from extraction.pipeline import process_pages
@@ -109,6 +109,10 @@ def main() -> None:
     """Main Streamlit application."""
     st.set_page_config(page_title="Clinical Guideline Extractor", layout="centered")
     _load_dotenv(Path(__file__).resolve().parent / ".env")
+    
+    # initialize session-specific ID for multi-user support
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())[:8]
 
     st.title("Clinical Guideline Extractor")
     st.caption("Extracts structured clinical content from PDFs using vision AI with predefined schemas. The model follows ontological definitions for pathways, drug monographs, and reference tables. AI-extracted content requires human review before clinical use.")
@@ -159,8 +163,9 @@ def main() -> None:
         help="Who is running this extraction (e.g., your name or email)",
     )
 
-    # output settings (fixed paths)
-    output_dir = Path(__file__).resolve().parent / "output"
+    # output settings (session-specific paths for multi-user support)
+    base_output_dir = Path(__file__).resolve().parent / "output"
+    output_dir = base_output_dir / st.session_state.session_id
     prompt_path = Path(__file__).resolve().parent / "schemas" / "content_extraction_prompt.yaml"
 
     if pdf is None:
@@ -175,7 +180,7 @@ def main() -> None:
             "sha256": pdf.sha256_hex,
         }
     )
-    st.caption("SHA-256 hash enables file version tracking. Output will be saved to: ./output/")
+    st.caption(f"SHA-256 hash enables file version tracking. Output will be saved to: ./output/{st.session_state.session_id}/")
 
     if st.button("Run extraction", type="primary", use_container_width=True):
         if not api_key:
@@ -254,18 +259,15 @@ def main() -> None:
             total_input_tokens += output.usage.get("input_tokens", 0)
             total_output_tokens += output.usage.get("output_tokens", 0)
             
-            # create flattened chunks with full context for RAG
-            for chunk in output.parsed_items:
-                flat_chunk = {
-                    "chunk_id": chunk["chunk_info"]["chunk_id"],
-                    "guideline_id": guideline_id,
-                    "guideline_name": guideline_name,
-                    "guideline_version": guideline_version,
-                    "page": output.page_number,
-                    "content": chunk["content"],
-                    "human_audit": chunk["human_audit"],
-                }
-                all_items_flat.append(flat_chunk)
+            # format chunks as flat array with full context
+            flat_chunks = format_flat_chunks(
+                chunks=output.parsed_items,
+                guideline_id=guideline_id,
+                guideline_name=guideline_name,
+                guideline_version=guideline_version,
+                page_number=output.page_number,
+            )
+            all_items_flat.extend(flat_chunks)
             
             # wrap each page with metadata
             has_errors = len(output.validation_errors) > 0
@@ -297,12 +299,12 @@ def main() -> None:
             pages=pages_wrapped,
         )
         
-        # save flat chunks with full context (for RAG)
-        combined_path = output_dir / "guideline_chunks_flat.json"
+        # save flat structure (for RAG)
+        combined_path = output_dir / "guideline_flat.json"
         write_json(combined_path, all_items_flat)
         
-        # save structured output with full metadata
-        structured_path = output_dir / "guideline_with_metadata.json"
+        # save hierarchical structure with full metadata
+        structured_path = output_dir / "guideline_hierarchical.json"
         write_json(structured_path, full_output)
 
         # calculate pages needing retry and collect errors
@@ -358,7 +360,7 @@ def main() -> None:
             with st.expander("Supported models for cost estimation"):
                 st.text(supported_models)
         
-        st.success("Files saved to: ./output/")
+        st.success(f"Files saved to: ./output/{st.session_state.session_id}/")
         
         st.subheader("Extraction metadata")
         
@@ -387,21 +389,21 @@ def main() -> None:
         col_dl1, col_dl2 = st.columns(2)
         with col_dl1:
             st.download_button(
-                "Download Chunks Only (Flat)",
+                "Download Flat JSON",
                 data=combined_path.read_text(encoding="utf-8"),
-                file_name="guideline_chunks_flat.json",
+                file_name="guideline_flat.json",
                 mime="application/json",
                 use_container_width=True,
-                help="Array of self-contained chunks with denormalized guideline info. Each chunk includes full context. Use for RAG systems or database import.",
+                help="Flat array of self-contained chunks. Each chunk includes denormalized guideline info (guideline_id, name, page). Use for RAG systems or database import.",
             )
         with col_dl2:
             st.download_button(
-                "Download Guideline with Metadata",
+                "Download Hierarchical JSON",
                 data=structured_path.read_text(encoding="utf-8"),
-                file_name="guideline_with_metadata.json",
+                file_name="guideline_hierarchical.json",
                 mime="application/json",
                 use_container_width=True,
-                help="Full hierarchical structure: guideline → pages → chunks. Includes all metadata and preserves document structure. Use for rendering complete guidelines.",
+                help="Hierarchical structure: guideline → pages → chunks. Metadata stored at top level. Use for rendering complete guidelines or preserving document structure.",
             )
 
         st.subheader("Extracted content")
