@@ -405,6 +405,8 @@ def main() -> None:
                 use_container_width=True,
                 help="Hierarchical structure: guideline → pages → chunks. Metadata stored at top level. Use for rendering complete guidelines or preserving document structure.",
             )
+        
+        st.caption("Visualize JSON structure and relationships: [jsoncrack.com/editor](https://jsoncrack.com/editor)")
 
         st.subheader("Extracted content")
         if all_items_flat:
