@@ -1,0 +1,422 @@
+"""Streamlit UI for clinical guideline extraction."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+import streamlit as st
+
+from schemas.base_models import GuidelineInfo, HumanAudit
+from extraction.formatters import wrap_guideline_output, wrap_page_output
+from extraction.llm.client import AnthropicVisionClient
+from extraction.pipeline import process_pages
+from extraction.processors.pdf import render_pdf_bytes
+from extraction.utils import ensure_dir, write_json
+
+
+# pricing per million tokens (USD)
+MODEL_PRICING = {
+    "claude-3-5-haiku-20241022": {
+        "input": 0.80,
+        "output": 4.00,
+    },
+    "claude-3-5-sonnet-20241022": {
+        "input": 3.00,
+        "output": 15.00,
+    },
+    "claude-sonnet-4-20250514": {
+        "input": 3.00,
+        "output": 15.00,
+    },
+    "claude-opus-4-20250514": {
+        "input": 15.00,
+        "output": 75.00,
+    },
+    "claude-opus-4-1-20250805": {
+        "input": 15.00,
+        "output": 75.00,
+    },
+}
+
+
+def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float | None:
+    """Calculate estimated cost for a model. Returns None if pricing unavailable."""
+    pricing = MODEL_PRICING.get(model)
+    if not pricing:
+        return None
+    
+    input_cost = (input_tokens / 1_000_000) * pricing["input"]
+    output_cost = (output_tokens / 1_000_000) * pricing["output"]
+    return input_cost + output_cost
+
+
+@dataclass(frozen=True)
+class UploadedPdf:
+    """Container for uploaded PDF data."""
+
+    filename: str
+    size_bytes: int
+    sha256_hex: str
+    content: bytes
+
+
+def _load_dotenv(dotenv_path: Path) -> None:
+    """Load environment variables from a .env file."""
+
+    if not dotenv_path.is_file():
+        return
+
+    for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def _read_uploaded_pdf() -> UploadedPdf | None:
+    """Read and validate uploaded PDF file."""
+    uploaded = st.file_uploader(
+        "Upload a PDF",
+        type=["pdf"],
+        help="Upload a PDF. The conversion step is a placeholder for now.",
+    )
+    if uploaded is None:
+        return None
+
+    content = uploaded.getvalue()
+    if not content:
+        raise ValueError("Uploaded file is empty.")
+
+    sha256_hex = hashlib.sha256(content).hexdigest()
+    return UploadedPdf(
+        filename=uploaded.name,
+        size_bytes=len(content),
+        sha256_hex=sha256_hex,
+        content=content,
+    )
+
+
+def main() -> None:
+    """Main Streamlit application."""
+    st.set_page_config(page_title="Clinical Vision Extractor", layout="centered")
+    _load_dotenv(Path(__file__).resolve().parent / ".env")
+
+    st.title("Clinical vision extractor")
+    st.caption("Upload a PDF and extract structured clinical pathways.")
+
+    try:
+        pdf = _read_uploaded_pdf()
+    except Exception as e:
+        st.error(f"Upload failed: {e}")
+        return
+
+    st.subheader("Vision settings")
+    api_key = st.text_input(
+        "Anthropic API key",
+        type="password",
+        value=os.getenv("ANTHROPIC_API_KEY", ""),
+        help="Add your API key to enable extraction.",
+    )
+    model_name = st.text_input(
+        "Model name",
+        value="claude-sonnet-4-20250514",
+        help="Popular models: claude-sonnet-4-20250514, claude-3-5-haiku-20241022 (faster), claude-opus-4-20250514 (best)",
+    )
+    max_tokens = st.number_input("Max tokens", min_value=256, max_value=16384, value=4000)
+    batch_size = st.number_input(
+        "Batch size",
+        min_value=1,
+        max_value=20,
+        value=5,
+        help="Number of pages to process in parallel. Higher = faster but more API load.",
+    )
+    dpi = st.number_input("Render DPI", min_value=100, max_value=400, value=200)
+
+    st.subheader("Guideline metadata")
+    col1, col2 = st.columns(2)
+    with col1:
+        guideline_id = st.text_input(
+            "Guideline ID",
+            value="apc2023",
+            help="Unique identifier (e.g., apc2023, who2024_hiv)",
+        )
+        guideline_name = st.text_input(
+            "Guideline name",
+            value="APC Clinical Guidelines",
+        )
+        guideline_version = st.text_input(
+            "Version/Year",
+            value="2023",
+        )
+    with col2:
+        country = st.text_input(
+            "Country",
+            value="South Africa",
+            help="Country of jurisdiction",
+        )
+        jurisdiction = st.text_input(
+            "Jurisdiction",
+            value="National",
+            help="e.g., National, Provincial: Western Cape",
+        )
+        organization = st.text_input(
+            "Organization",
+            value="Department of Health",
+            help="Publishing authority",
+        )
+    
+    regulatory_status = st.selectbox(
+        "Regulatory status",
+        options=["official", "draft", "guidance", "archived"],
+        index=0,
+    )
+    created_by = st.text_input(
+        "Extracted by",
+        value=os.getenv("USER", "system"),
+        help="Your name or username",
+    )
+
+    st.subheader("Output settings")
+    default_output_dir = Path(__file__).resolve().parent / "clinical_knowledge_graph"
+    output_dir_input = st.text_input(
+        "Output folder",
+        value=str(default_output_dir),
+    )
+    prompt_path_input = st.text_input(
+        "Prompt file",
+        value=str(Path(__file__).resolve().parent / "schemas" / "clinical_pathways" / "prompt.yaml"),
+    )
+
+    if pdf is None:
+        st.info("Choose a PDF to get started.")
+        return
+
+    st.subheader("File details")
+    st.write(
+        {
+            "filename": pdf.filename,
+            "size_bytes": pdf.size_bytes,
+            "sha256": pdf.sha256_hex,
+        }
+    )
+
+    if st.button("Run extraction", type="primary", use_container_width=True):
+        if not api_key:
+            st.error("Provide an Anthropic API key to continue.")
+            return
+
+        try:
+            output_dir = Path(output_dir_input).expanduser()
+            prompt_path = Path(prompt_path_input).expanduser()
+            ensure_dir(output_dir)
+
+            # render PDF pages first
+            init_status = st.info("Analyzing PDF...")
+            pages = render_pdf_bytes(pdf.content, dpi=int(dpi))
+            total_pages = len(pages)
+            init_status.success(f"Starting extraction for {total_pages} pages (batch size: {int(batch_size)})")
+
+            progress = st.progress(0, text="Starting...")
+            status = st.empty()
+
+            def _update_progress(current: int, total: int) -> None:
+                progress.progress(current / total, text=f"Completed {current} of {total} pages")
+                status.info(f"{current} completed | {total - current} remaining")
+
+            client = AnthropicVisionClient(
+                api_key=api_key,
+                model=model_name,
+                max_tokens=int(max_tokens),
+            )
+            page_outputs = process_pages(
+                pages=pages,
+                guideline_id=guideline_id,
+                guideline_name=guideline_name,
+                guideline_version=guideline_version,
+                prompt_path=prompt_path,
+                output_dir=output_dir,
+                client=client,
+                extracted_by=created_by,
+                batch_size=int(batch_size),
+                progress_callback=_update_progress,
+            )
+        except Exception as e:
+            st.error(f"Extraction failed: {e}")
+            return
+
+        all_items: list[dict] = []
+        all_items_flat: list[dict] = []  # for RAG with full context
+        error_count = 0
+        total_input_tokens = 0
+        total_output_tokens = 0
+        pages_wrapped = []
+        
+        for output in page_outputs:
+            all_items.extend(output.parsed_items)
+            error_count += len(output.validation_errors)
+            total_input_tokens += output.usage.get("input_tokens", 0)
+            total_output_tokens += output.usage.get("output_tokens", 0)
+            
+            # create flattened chunks with full context for RAG
+            for chunk in output.parsed_items:
+                flat_chunk = {
+                    "chunk_id": chunk["chunk_info"]["chunk_id"],
+                    "guideline_id": guideline_id,
+                    "guideline_name": guideline_name,
+                    "guideline_version": guideline_version,
+                    "page": output.page_number,
+                    "content": chunk["content"],
+                    "human_audit": chunk["human_audit"],
+                }
+                all_items_flat.append(flat_chunk)
+            
+            # wrap each page with metadata
+            has_errors = len(output.validation_errors) > 0
+            page_wrapped = wrap_page_output(
+                page_number=output.page_number,
+                chunks=output.parsed_items,
+                extracted_by=created_by,
+                extraction_status="validation_failed" if has_errors else "success",
+                needs_retry=has_errors,
+            )
+            pages_wrapped.append(page_wrapped)
+        
+        # create guideline info and audit
+        guideline_info = GuidelineInfo(
+            guideline_id=guideline_id,
+            guideline_name=guideline_name,
+            guideline_version=guideline_version,
+            country=country,
+            jurisdiction=jurisdiction,
+            organization=organization,
+            regulatory_status=regulatory_status,
+        )
+        guideline_audit = HumanAudit(created_by=created_by)
+        
+        # wrap all pages with guideline info and audit
+        full_output = wrap_guideline_output(
+            guideline_info=guideline_info,
+            guideline_audit=guideline_audit,
+            pages=pages_wrapped,
+        )
+        
+        # save flat chunks with full context (for RAG)
+        combined_path = output_dir / "clinical_guidelines_flat.json"
+        write_json(combined_path, all_items_flat)
+        
+        # save structured output with full metadata
+        structured_path = output_dir / "guideline_structured.json"
+        write_json(structured_path, full_output)
+
+        # calculate pages needing retry
+        pages_needing_retry = [p["page_info"]["page_number"] for p in pages_wrapped if p["page_info"]["needs_retry"]]
+        
+        if pages_needing_retry:
+            st.warning(
+                f"Extraction complete with failures. Pages: {len(page_outputs)}. "
+                f"Pathways: {len(all_items_flat)}. "
+                f"Pages needing retry: {len(pages_needing_retry)} (pages {', '.join(map(str, pages_needing_retry))})"
+            )
+        else:
+            st.success(
+                f"Extraction complete. Pages: {len(page_outputs)}. "
+                f"Pathways: {len(all_items_flat)}. All pages validated successfully."
+            )
+        
+        st.subheader("API Usage Statistics")
+        
+        estimated_cost = calculate_cost(model_name, total_input_tokens, total_output_tokens)
+        
+        if estimated_cost is not None:
+            col1, col2, col3, col4, col5 = st.columns(5)
+        else:
+            col1, col2, col3, col4 = st.columns(4)
+            
+        with col1:
+            st.metric("API Requests", len(page_outputs))
+        with col2:
+            st.metric("Input Tokens", f"{total_input_tokens:,}")
+        with col3:
+            st.metric("Output Tokens", f"{total_output_tokens:,}")
+        with col4:
+            st.metric("Total Tokens", f"{total_input_tokens + total_output_tokens:,}")
+            
+        if estimated_cost is not None:
+            with col5:
+                st.metric("Est. Cost (USD)", f"${estimated_cost:.4f}")
+        else:
+            st.caption("Cost estimation unavailable for this model")
+        
+        st.write({"output_folder": str(output_dir)})
+        
+        st.subheader("Guideline metadata")
+        meta_col1, meta_col2 = st.columns(2)
+        with meta_col1:
+            st.write({
+                "Guideline ID": guideline_info.guideline_id,
+                "Name": guideline_info.guideline_name,
+                "Version": guideline_info.guideline_version,
+                "Approval Status": guideline_audit.status,
+            })
+        with meta_col2:
+            st.write({
+                "Country": guideline_info.country,
+                "Jurisdiction": guideline_info.jurisdiction,
+                "Organization": guideline_info.organization,
+                "Regulatory Status": guideline_info.regulatory_status,
+            })
+        
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            st.download_button(
+                "Download flat JSON (for RAG)",
+                data=combined_path.read_text(encoding="utf-8"),
+                file_name="clinical_guidelines_flat.json",
+                mime="application/json",
+                use_container_width=True,
+                help="Self-contained chunks with full context (chunk_id, guideline info, page, content)",
+            )
+        with col_dl2:
+            st.download_button(
+                "Download structured JSON (with metadata)",
+                data=structured_path.read_text(encoding="utf-8"),
+                file_name="guideline_structured.json",
+                mime="application/json",
+                use_container_width=True,
+                help="Full structure with guideline, page, and chunk metadata",
+            )
+
+        st.subheader("Extracted pathways")
+        if all_items_flat:
+            # group by page number
+            from collections import defaultdict
+            pages_dict = defaultdict(list)
+            for item in all_items_flat:
+                page_num = item.get('page', 0)
+                pages_dict[page_num].append(item)
+            
+            # display grouped by page
+            for page_num in sorted(pages_dict.keys()):
+                pathways = pages_dict[page_num]
+                with st.expander(f"Page {page_num} ({len(pathways)} pathway{'s' if len(pathways) != 1 else ''})"):
+                    for idx, item in enumerate(pathways, start=1):
+                        content = item.get('content', {})
+                        topic = content.get('topic', 'Unknown')
+                        scenario = content.get('specific_scenario', 'N/A')
+                        st.markdown(f"**Pathway {idx}: {topic} - {scenario}**")
+                        st.json(item)
+                        if idx < len(pathways):
+                            st.divider()
+        else:
+            st.warning("No pathways extracted.")
+
+
+if __name__ == "__main__":
+    main()

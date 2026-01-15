@@ -1,0 +1,1 @@
+"""Clinical pathways extraction schema."""
