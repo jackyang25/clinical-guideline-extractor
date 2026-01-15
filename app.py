@@ -10,10 +10,10 @@ from pathlib import Path
 
 import streamlit as st
 
-from schemas.base_models import GuidelineInfo, HumanAudit
+from schemas.base_models import HumanAudit
 from extraction.formatters import format_flat_chunks, wrap_guideline_output, wrap_page_output
 from extraction.llm.client import AnthropicVisionClient
-from extraction.metadata_extractor import extract_metadata
+from extraction.metadata_extractor import extract_metadata, metadata_to_guideline_info
 from extraction.pipeline import process_pages
 from extraction.processors.pdf import render_pdf_bytes
 from extraction.utils import ensure_dir, write_json
@@ -186,6 +186,7 @@ def main() -> None:
         }
     )
     st.caption(f"SHA-256 hash enables file version tracking. Output will be saved to: ./output/{st.session_state.session_id}/")
+    st.warning("Running a new extraction will overwrite previous results. Download your files first if you want to keep them.")
 
     if st.button("Run extraction", type="primary", use_container_width=True):
         if not api_key:
@@ -205,17 +206,9 @@ def main() -> None:
             metadata_client = AnthropicVisionClient(api_key, model_name, max_tokens=1000)
             first_page = render_pdf_bytes(pdf.content, dpi=150)[0]  # lower DPI for speed
             auto_metadata = extract_metadata(first_page, metadata_client)
+            guideline_info = metadata_to_guideline_info(auto_metadata, regulatory_status="draft")
             
-            # generate guideline info from metadata
-            guideline_id = auto_metadata.guideline_name.lower().replace(" ", "_")[:50]
-            guideline_name = auto_metadata.guideline_name
-            guideline_version = auto_metadata.guideline_version
-            country = auto_metadata.country
-            jurisdiction = auto_metadata.jurisdiction
-            organization = auto_metadata.organization
-            regulatory_status = "draft"
-            
-            metadata_status.success(f"Metadata extracted: {guideline_name} v{guideline_version}")
+            metadata_status.success(f"Metadata extracted: {guideline_info.guideline_name} v{guideline_info.guideline_version}")
             
             # step 2: render PDF pages and extract content
             init_status = st.info("Step 2/2: Rendering PDF pages...")
@@ -237,9 +230,9 @@ def main() -> None:
             )
             page_outputs = process_pages(
                 pages=pages,
-                guideline_id=guideline_id,
-                guideline_name=guideline_name,
-                guideline_version=guideline_version,
+                guideline_id=guideline_info.guideline_id,
+                guideline_name=guideline_info.guideline_name,
+                guideline_version=guideline_info.guideline_version,
                 prompt_path=prompt_path,
                 output_dir=output_dir,
                 client=client,
@@ -267,9 +260,9 @@ def main() -> None:
             # format chunks as flat array with full context
             flat_chunks = format_flat_chunks(
                 chunks=output.parsed_items,
-                guideline_id=guideline_id,
-                guideline_name=guideline_name,
-                guideline_version=guideline_version,
+                guideline_id=guideline_info.guideline_id,
+                guideline_name=guideline_info.guideline_name,
+                guideline_version=guideline_info.guideline_version,
                 page_number=output.page_number,
             )
             all_items_flat.extend(flat_chunks)
@@ -285,16 +278,7 @@ def main() -> None:
             )
             pages_wrapped.append(page_wrapped)
         
-        # create guideline info and audit
-        guideline_info = GuidelineInfo(
-            guideline_id=guideline_id,
-            guideline_name=guideline_name,
-            guideline_version=guideline_version,
-            country=country,
-            jurisdiction=jurisdiction,
-            organization=organization,
-            regulatory_status=regulatory_status,
-        )
+        # create audit
         guideline_audit = HumanAudit(created_by=created_by)
         
         # wrap all pages with guideline info and audit
@@ -367,9 +351,24 @@ def main() -> None:
         
         st.success(f"Files saved to: ./output/{st.session_state.session_id}/")
         
-        st.subheader("Extraction metadata")
+        st.subheader("Guideline-level metadata")
         
-        st.caption("GuidelineInfo")
+        st.caption("Extracted Metadata (AI-extracted from cover page - raw output)")
+        st.json({
+            "guideline_name": auto_metadata.guideline_name,
+            "guideline_id": auto_metadata.guideline_id,
+            "guideline_version": auto_metadata.guideline_version,
+            "publication_date": auto_metadata.publication_date,
+            "last_updated_date": auto_metadata.last_updated_date,
+            "organization": auto_metadata.organization,
+            "country": auto_metadata.country,
+            "jurisdiction_level": auto_metadata.jurisdiction_level,
+            "jurisdiction_name": auto_metadata.jurisdiction_name,
+            "language": auto_metadata.language,
+            "intended_audience": auto_metadata.intended_audience,
+        })
+        
+        st.caption("GuidelineInfo (guideline-level, system-processed)")
         st.json({
             "guideline_id": guideline_info.guideline_id,
             "guideline_name": guideline_info.guideline_name,
@@ -380,7 +379,7 @@ def main() -> None:
             "regulatory_status": guideline_info.regulatory_status,
         })
         
-        st.caption("HumanAudit")
+        st.caption("HumanAudit (guideline-level, formal approval tracking)")
         st.json({
             "status": guideline_audit.status,
             "version": guideline_audit.version,
@@ -390,6 +389,9 @@ def main() -> None:
             "approval_date": guideline_audit.approval_date,
             "notes": guideline_audit.notes,
         })
+        st.caption("Note: HumanAudit also exists at page-level and chunk-level in the JSON outputs for granular review tracking.")
+        
+        st.info("Download your results below. Running a new extraction will overwrite these files.")
         
         col_dl1, col_dl2 = st.columns(2)
         with col_dl1:

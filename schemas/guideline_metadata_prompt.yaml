@@ -20,11 +20,26 @@ schema_definition:
     meaning: The full title of the document
     required: true
     example: "Clinical Practice Guidelines for Diabetes Management"
+  guideline_id:
+    type: string
+    meaning: Explicit identifier if present (document number, reference code, ISBN, etc.)
+    required: false
+    example: "DOC-2024-089" or "ISBN 978-1-234567-89-0" or "REF-DM-001"
   guideline_version:
     type: string
-    meaning: Version number, edition, or publication year if visible
+    meaning: Version or edition number if visible
     required: false
-    example: "Version 3.0" or "2024 Edition" or "March 2024"
+    example: "Version 3.0" or "Second Edition"
+  publication_date:
+    type: string
+    meaning: Original publication or release date
+    required: false
+    example: "March 2024" or "2024" or "15 March 2024"
+  last_updated_date:
+    type: string
+    meaning: Last revised or updated date if different from publication date
+    required: false
+    example: "Revised January 2025" or "Updated 2025"
   organization:
     type: string
     meaning: Publishing organization, department, or authority
@@ -34,23 +49,45 @@ schema_definition:
     type: string
     meaning: Country where this guideline applies
     required: false
-    example: "United States" or "Canada" or "United Kingdom"
-  jurisdiction:
+    example: "South Africa" or "Canada" or "United Kingdom"
+  jurisdiction_level:
     type: string
-    meaning: Scope of the guideline
+    meaning: Scope level of the guideline
     required: false
-    allowed_examples: ["National", "Provincial", "Regional", "State", "Territory"]
+    allowed_examples: ["National", "Provincial", "Regional", "State", "Territory", "District"]
+  jurisdiction_name:
+    type: string
+    meaning: Specific jurisdiction name if explicitly stated
+    required: false
+    example: "Western Cape" or "Gauteng" or "KwaZulu-Natal" or "Ontario"
+  language:
+    type: string
+    meaning: Language of the document if explicitly stated
+    required: false
+    example: "English" or "isiZulu" or "Afrikaans"
+  intended_audience:
+    type: string
+    meaning: Target audience if explicitly stated on the cover
+    required: false
+    example: "Primary care clinicians" or "Community health workers" or "Nurses and doctors"
 
 output_rules:
   - Return JSON object only, no markdown or commentary
   - Extract ONLY visible information from the page
   - If information is not present, use empty string ""
   - Do NOT infer or guess any field values
-  - Copy text exactly as it appears (preserve capitalization and formatting)
+  - Copy text exactly as it appears (preserve capitalization and punctuation verbatim)
+  - Do NOT invent identifiers or dates - only extract if explicitly visible
 
 example:
   guideline_name: "Clinical Practice Guidelines for Diabetes Management"
-  guideline_version: "Version 3.0 - 2024"
+  guideline_id: "DOC-2024-089"
+  guideline_version: "Version 3.0"
+  publication_date: "March 2024"
+  last_updated_date: "Revised January 2025"
   organization: "Ministry of Health"
-  country: "Canada"
-  jurisdiction: "National"
+  country: "South Africa"
+  jurisdiction_level: "Provincial"
+  jurisdiction_name: "Western Cape"
+  language: "English"
+  intended_audience: "Primary care clinicians"

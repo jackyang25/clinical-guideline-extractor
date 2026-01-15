@@ -22,6 +22,10 @@ class GenericContent(BaseModel):
     key_points: list[str] = Field(
         default_factory=list, description="Main takeaways or important facts"
     )
+    cross_references: list[str] = Field(
+        default_factory=list,
+        description="Reference markers exactly as shown (e.g., '→ 19', '¹')",
+    )
     raw_text: str = Field(
         default="",
         description="Preserved original text for later schema refinement or analysis",

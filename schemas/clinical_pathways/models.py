@@ -27,7 +27,14 @@ class LogicConnection(BaseModel):
 
     trigger: str
     target: str
-    type: Literal["comorbidity", "escalation", "differential_diagnosis"]
+    type: Literal[
+        "escalation",
+        "comorbidity",
+        "differential_diagnosis",
+        "follow_up",
+        "alternate_pathway",
+        "prerequisite",
+    ]
 
 
 class ClinicalPathway(BaseModel):
@@ -53,4 +60,8 @@ class ClinicalPathway(BaseModel):
     clinical_criteria: ClinicalCriteria
     protocol: Protocol
     logic_connections: list[LogicConnection] = Field(default_factory=list)
+    cross_references: list[str] = Field(
+        default_factory=list,
+        description="Reference markers exactly as shown (e.g., '→ 19', '¹', '→ TB')",
+    )
     disposition: str

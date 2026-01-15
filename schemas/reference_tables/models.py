@@ -37,6 +37,10 @@ class ReferenceTable(BaseModel):
         default_factory=list,
         description="Important caveats, exceptions, or usage notes",
     )
+    cross_references: list[str] = Field(
+        default_factory=list,
+        description="Reference markers exactly as shown (e.g., '→ 19', '¹')",
+    )
     source_reference: str = Field(
         default="", description="Citation or source for this table"
     )

@@ -55,6 +55,10 @@ class DrugMonograph(BaseModel):
     pregnancy_category: str = Field(
         default="", description="Pregnancy safety category or recommendation"
     )
+    cross_references: list[str] = Field(
+        default_factory=list,
+        description="Reference markers exactly as shown (e.g., '→ 19', '¹')",
+    )
     notes: list[str] = Field(
         default_factory=list, description="Important clinical pearls or warnings"
     )
