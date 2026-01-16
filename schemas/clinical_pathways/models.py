@@ -36,18 +36,36 @@ class NumericRange(BaseModel):
 class PathwayLogic(BaseModel):
     """Structured if/then logic for clinical decision-making.
     
-    CRITICAL: Capture BOTH positive and negative branches. 
-    If a branch leads to 'no action', use then_action: 'Routine care' or 'Exit pathway'.
+    CRITICAL Rules:
+    - Capture BOTH positive and negative branches
+    - Use compound AND conditions for nested gates (e.g., 'Glucose ≥ 11.1 AND Ketones present')
+    - Each distinct path through nested logic should be a separate entry
+    - If a branch leads to 'no action', use then_action: 'Routine care' or 'Exit pathway'
+    
+    Example of nested conditional (ketone gate):
+    - Entry 1: if_condition="Glucose ≥ 11.1 AND Ketones present", then_action="Give IV fluids"
+    - Entry 2: if_condition="Glucose ≥ 11.1 AND Ketones absent", then_action="Routine monitoring"
     """
 
     if_condition: str = Field(
-        ..., description="The clinical condition or patient state that triggers this action"
+        ..., 
+        description=(
+            "The clinical condition or patient state that triggers this action. "
+            "Use compound AND conditions to capture nested decision gates "
+            "(e.g., 'Glucose ≥ 11.1 AND Symptoms present AND Ketones present')"
+        )
     )
     then_action: str = Field(
-        ..., description="The specific medical action or intervention to take (use 'Routine care' or 'Exit pathway' for negative branches)"
+        ..., 
+        description=(
+            "The specific medical action or intervention to take. "
+            "Use 'Routine care' or 'Exit pathway' for negative branches. "
+            "For time-staged treatments, reference implementation_notes for detailed staging."
+        )
     )
     next_step: str = Field(
-        default="", description="What happens next (e.g., recheck in 15 min, refer to page 16)"
+        default="", 
+        description="What happens next (e.g., recheck in 15 min, refer to page 16, monitor until ketones clear)"
     )
 
 
@@ -105,7 +123,13 @@ class ClinicalPathway(BaseModel):
     )
     implementation_notes: list[str] = Field(
         default_factory=list,
-        description="Step-by-step how-to instructions, including injected footnote details (e.g., drug preparation, dosing calculations)",
+        description=(
+            "Step-by-step how-to instructions, including:\n"
+            "- Injected footnote details (e.g., 'Footnote 1: Mix 15g sugar in 200mL water')\n"
+            "- Drug preparation and dosing calculations\n"
+            "- Temporal staging for time-dependent protocols (e.g., 'Stage 1 (First hour): 20mL/kg IV', 'Stage 2: 10mL/kg/hr')\n"
+            "- Monitoring intervals with temporal context"
+        ),
     )
     exit_points: list[ExitPoint] = Field(
         default_factory=list,

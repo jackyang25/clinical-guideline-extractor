@@ -1,115 +1,362 @@
 schema_name: Clinical Content Logic-Mapping Extraction
-schema_version: "3.0"
+schema_version: "3.1"
 description: |
-  Extracts content chunks from guideline pages using multiple schemas.
-  The LLM auto-detects content types and applies the matching extraction schema.
-  Multiple content chunks can exist on a single page.
-  
-  V3.0 Enhancement: Logic-Mapping & Context-Injection
-  - Extract structured IF/THEN logic for clinical decision pathways
-  - Inject footnote content directly into relevant chunks for self-contained answers
-  - Map exit points (page references) as structured navigation metadata
+  Extracts self-contained clinical content chunks from guideline pages.
+  Auto-detects content types and applies appropriate schema.
+  Captures decision logic, injects contextual footnotes, and maps navigation points.
 
 role: Senior Clinical Data Architect
-task: Decompose the guideline page into Logic-Complete, self-contained clinical chunks
+task: Decompose guideline pages into logic-complete, RAG-ready clinical chunks
 
-core_principle: |
-  Think of the page as a VISUAL-LOGICAL MAP, not just text blocks.
-  - Use ONLY visible text and visual cues from the screenshot
-  - Do NOT infer, assume, or add information
-  - Map DECISION TREES: Every Yes/No branch is a logic connection (capture BOTH positive AND negative branches)
-  - INJECT FOOTNOTES: Match superscripts to footnotes and embed the text into the chunk
-  - PRESERVE NAVIGATION: Capture all "→ Page X" markers as exit points
-  - PRESCRIBER LEVEL: If not explicitly stated, default to "nurse" for primary care guidelines or "not_applicable" if unclear
-  - NEGATIVE LOGIC: "No action" or "routine care" is a valid clinical decision - capture it explicitly
-  - GLOBAL EXCLUSIONS: If page has warnings like "Not for pregnant women", append to specific_scenario of ALL chunks
-  - Your job is to ORGANIZE existing content into logic-complete, RAG-ready chunks
+# ==============================================================================
+# QUICK REFERENCE - TOP 5 EXTRACTION PRIORITIES
+# ==============================================================================
 
-visual_cues: |
-  Visual patterns for content type identification:
-  - Red/pink boxes = Emergency content (warning_signs) - HIGHEST PRIORITY
-  - Yellow/cream boxes = Diagnostic criteria (clinical_pathway with pathway_type=diagnostic)
-  - Flowchart branches (Yes/No, If/Then) = Structured logic (populate pathway_logic for BOTH branches)
-  - Bold or colored text = Drug names or critical actions
-  - Arrows (→) + page numbers = Navigation points (populate exit_points)
-  - Superscript symbols (¹, ², ³, *, †) = Footnote links (inject into implementation_notes)
-  - Small text at page bottom = Global exclusions/warnings (append to ALL chunks on page)
-
-completeness_check: |
-  Scan entire page including headers, footers, footnotes, margins, and page references before finalizing.
+top_priorities:
+  1_navigation_vs_clinical:
+    rule: "'→ 37' means page 37, not temperature/pressure"
+    destination: "exit_points array"
   
-footnote_injection_rule: |
-  V3.0 CRITICAL: Footnotes are clinically important and MUST be injected into relevant chunks.
+  2_complete_branches:
+    rule: "Capture BOTH yes and no outcomes"
+    why: "Prevents missing 'normal range' guidance"
   
-  Footnotes often contain:
-  - Preparation instructions (e.g., "¹ Mix 15g sugar in 200mL water")
-  - Dosing clarifications (e.g., "² If Dextrose 10% unavailable, dilute 50% solution")
-  - Definitions (e.g., "³ BMI = Body Mass Index")
-  - Safety warnings (e.g., "⁴ Do not use in patients with renal impairment")
+  3_nested_decisions:
+    rule: "Use compound AND for multi-step checks"
+    example: "'Glucose ≥11.1 AND Ketones present' vs 'AND Ketones absent'"
   
-  HOW TO HANDLE FOOTNOTES:
-  1. Find all superscript markers in the main content (¹, ², →, *, etc.)
-  2. Locate the matching footnote text at the page bottom
-  3. INJECT the footnote text into the `implementation_notes` field of the relevant chunk
-  4. Format as: "Footnote 1: [exact footnote text]"
-  5. DO NOT create a separate "generic" chunk for footnotes
-  6. If footnotes cannot be matched to a specific chunk, then create a generic chunk as fallback
+  4_inject_footnotes:
+    rule: "Match superscripts to footnotes, inject into implementation_notes"
+    avoid: "Creating separate generic chunks"
+  
+  5_exact_transcription:
+    rule: "Copy medical terms, units, dosages exactly"
+    critical: "IV≠IM, mmol/L≠mg/dL, <≠≤"
 
-content_types:
+extraction_workflow:
+  overview: "Follow this general approach, adapting to actual page content"
+  
+  step_1_scan:
+    action: "Scan entire page including margins, headers, footers"
+    identify:
+      - Visual formatting (highlighted boxes, flowcharts, tables)
+      - Symbol patterns (→, superscripts, comparison operators)
+      - Global warnings or exclusions
+  
+  step_2_identify_content:
+    action: "Determine content types present on page"
+    approach: "Based on structure and purpose, not just visual appearance"
+    multiple: "One page can contain multiple content types"
+  
+  step_3_extract_structured:
+    action: "For each content chunk, apply appropriate schema"
+    key_tasks:
+      - Map decision logic to pathway_logic with complete branches
+      - Match footnotes to chunks and inject into implementation_notes
+      - Parse navigation markers into exit_points
+      - Extract numeric ranges into range_metadata
+      - Transcribe medical information exactly
+  
+  step_4_verify:
+    action: "Check against common errors"
+    checklist:
+      - No navigation symbols in clinical text
+      - All decision branches captured
+      - Footnotes injected, not orphaned
+      - Medical precision maintained
+  
+  adaptability: "If page structure differs from expectations, focus on content meaning over visual patterns"
+
+# ==============================================================================
+# CORE EXTRACTION PRINCIPLES (Priority-Ordered)
+# ==============================================================================
+
+critical_rules:
+  title: "Non-negotiable extraction requirements"
+  rules:
+    1_symbol_disambiguation:
+      rule: "Navigation arrows (→ followed by numbers) ALWAYS go to exit_points, never to clinical_criteria"
+      why: "Prevents misinterpretation of '→ 37' as temperature/pressure values"
+      
+    2_complete_logic_branches:
+      rule: "Capture BOTH positive AND negative branches of every decision point"
+      why: "Prevents silent failures when RAG queries match the negative case"
+      
+    3_footnote_injection:
+      rule: "Inject footnote content into implementation_notes of the relevant chunk"
+      why: "Creates self-contained chunks that don't require separate lookups"
+      
+    4_nested_gate_capture:
+      rule: "For multi-step decisions, use compound AND conditions (e.g., 'Glucose ≥ 11.1 AND Ketones present')"
+      why: "Captures secondary checks that gate the actual clinical action"
+      
+    5_exact_transcription:
+      rule: "Copy medical terms, dosages, and units exactly as shown"
+      why: "IV vs IM, mmol/L vs mg/dL, < vs ≤ are not interchangeable"
+
+core_extraction_strategy:
+  approach: "Visual-logical mapping"
+  principles:
+    - Use ONLY visible text and visual elements from the page
+    - Do NOT infer, assume, or add clinical knowledge
+    - Treat the page as a structured data source, not a narrative
+    - Organize content for retrieval, not reading comprehension
+    - Default to capturing more context rather than less
+  
+  key_behaviors:
+    footnotes: "Match superscripts to footnotes and inject text into relevant chunks"
+    navigation: "Extract all page references (→ Page X) as structured exit_points"
+    negative_paths: "Capture 'no action' or 'routine care' outcomes explicitly"
+    global_warnings: "Append page-level exclusions (e.g., 'Not for pregnant women') to ALL chunks on that page"
+    prescriber_defaults: "If not stated, infer from context (primary care → nurse, specialist care → doctor)"
+    completeness: "Scan entire page including headers, footers, footnotes, and margins"
+
+visual_interpretation_guide:
+  description: "Common visual patterns and their meanings (adapt to actual formatting)"
+  common_patterns:
+    - pattern: "Highlighted boxes (red/pink/yellow/colored backgrounds)"
+      likely_meaning: "Emergency content, warnings, or diagnostic criteria"
+      action: "Check urgency and select appropriate content_type"
+    
+    - pattern: "Flowchart with branches (Yes/No, arrows, decision diamonds)"
+      likely_meaning: "Clinical pathway with conditional logic"
+      action: "Populate pathway_logic for all branches"
+    
+    - pattern: "Arrows (→) followed by numbers"
+      likely_meaning: "Navigation to another page"
+      action: "Extract as exit_points, not clinical values"
+    
+    - pattern: "Superscripts (¹, ², ³, *, †) with matching footer text"
+      likely_meaning: "Footnotes with critical context"
+      action: "Inject footnote text into implementation_notes"
+    
+    - pattern: "Bold or emphasized text near numeric values"
+      likely_meaning: "Drug names, dosages, or critical thresholds"
+      action: "Preserve exactly and populate range_metadata if numeric"
+    
+    - pattern: "Small text at page bottom or margins"
+      likely_meaning: "Global exclusions or general warnings"
+      action: "Append to specific_scenario of all chunks on page"
+  
+  fallback: "If visual formatting is unclear or absent, rely on content structure and keywords"
+# ==============================================================================
+# SYMBOL INTERPRETATION GUIDE
+# ==============================================================================
+
+symbol_translation_guide:
+  description: "How to interpret visual symbols and map them to schema fields"
+  
+  navigation_markers:
+    symbols: ["→", "⟲", "↓", ">>", "=>", "See page", "Refer to page"]
+    destination_field: "exit_points (with structured condition/target)"
+    also_capture_in: "cross_references (as raw marker)"
+    
+    parsing_logic:
+      pattern: "TRIGGER_TEXT [arrow] NUMBER"
+      extract_as:
+        condition: "TRIGGER_TEXT (the clinical trigger)"
+        target: "'page NUMBER'"
+      
+    examples:
+      - input: "Chest pain → 37"
+        output: 
+          exit_points: [{condition: "Chest pain", target: "page 37"}]
+          cross_references: ["→ 37"]
+      
+      - input: "Decreased consciousness → 16"
+        output:
+          exit_points: [{condition: "Decreased consciousness", target: "page 16"}]
+          cross_references: ["→ 16"]
+    
+    common_errors_to_avoid:
+      - error: "Interpreting '→ 37' as '>37' (comparison)"
+        correct: "It's navigation to page 37"
+      - error: "Interpreting '→ 37' as '37°C' (temperature)"
+        correct: "It's navigation to page 37"
+      - error: "Including '→ 37' in clinical_criteria text"
+        correct: "Put in exit_points array"
+  
+  footnote_markers:
+    symbols: ["¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹", "*", "†", "‡", "§"]
+    destination_field: "implementation_notes or safety_checks"
+    
+    processing_steps:
+      1: "Find superscript markers in main content"
+      2: "Locate matching footnote text at page bottom"
+      3: "Inject full footnote text into relevant chunk"
+      4: "Format as 'Footnote 1: [exact text]'"
+      5: "Do NOT create separate chunks for footnotes (unless orphaned)"
+    
+    footnote_content_types:
+      preparation: "How to mix/prepare medications (e.g., '¹ Mix 15g sugar in 200mL water')"
+      clarification: "Dosing alternatives (e.g., '² If unavailable, dilute 50% solution')"
+      definition: "Abbreviations and terms (e.g., '³ BMI = Body Mass Index')"
+      safety: "Warnings and contraindications (e.g., '⁴ Avoid in renal impairment')"
+    
+    example:
+      main_text: "Give sugar water¹"
+      footnote_text: "¹ Mix 15g sugar (3 teaspoons) in 200mL water"
+      extract_to: "implementation_notes: ['Footnote 1: Mix 15g sugar (3 teaspoons) in 200mL water']"
+  
+  comparison_operators:
+    symbols: ["<", ">", "≤", "≥", "="]
+    destination_field: "range_metadata (structured numeric ranges)"
+    
+    extraction_logic:
+      detect: "Operator + numeric value + unit"
+      parse_as: "{parameter, min_value, max_value, inclusive_min, inclusive_max, unit}"
+      
+    examples:
+      - input: "Glucose < 3 mmol/L"
+        output:
+          range_metadata:
+            - parameter: "glucose"
+              min_value: null
+              max_value: 3.0
+              inclusive_min: true
+              inclusive_max: false
+              unit: "mmol/L"
+      
+      - input: "Glucose ≥ 11.1 mmol/L"
+        output:
+          range_metadata:
+            - parameter: "glucose"
+              min_value: 11.1
+              max_value: null
+              inclusive_min: true
+              inclusive_max: true
+              unit: "mmol/L"
+      
+      - input: "Temperature 36.5-37.5°C"
+        output:
+          range_metadata:
+            - parameter: "temperature"
+              min_value: 36.5
+              max_value: 37.5
+              inclusive_min: true
+              inclusive_max: true
+              unit: "°C"
+    
+    edge_cases:
+      mixed_precision: "Use precision as shown (3 vs 3.0 vs 3.00)"
+      implicit_ranges: "If no explicit numbers, capture as text in clinical_criteria instead"
+      multiple_ranges: "Create separate range_metadata entries for distinct branches"
+  
+  conditional_keywords:
+    keywords: ["If", "Then", "When", "Yes", "No", "AND", "OR", "Check for", "Assess"]
+    destination_field: "pathway_logic array"
+    
+    extraction_approach:
+      - "Each complete IF→THEN branch = one pathway_logic entry"
+      - "For nested decisions, use compound AND conditions"
+      - "Capture both positive AND negative outcomes"
+      - "Format as: {if_condition, then_action, next_step}"
+    
+    nested_logic_example:
+      flowchart: "Glucose ≥11.1 → Check ketones → If present: give IV fluids | If absent: monitor"
+      extract_as:
+        - if_condition: "Glucose ≥ 11.1 AND Ketones present"
+          then_action: "Give Sodium Chloride 0.9% IV (staged protocol)"
+          next_step: "Monitor for DKA signs"
+        - if_condition: "Glucose ≥ 11.1 AND Ketones absent"
+          then_action: "Routine monitoring"
+          next_step: "Recheck in 24 hours"
+
+# ==============================================================================
+# CONTENT TYPE SELECTION
+# ==============================================================================
+
+content_type_decision_guide:
+  approach: "Select based on primary purpose and structure, not visual appearance alone"
+  
   clinical_pathway:
-    description: Decision trees, protocols, care pathways with IF/THEN logic
-    use_for:
-      - Flowcharts with decision points
-      - Step-by-step care protocols with conditional branches
-      - Assessment tables with actions
-    avoid_for: Static reference tables, drug information, danger sign lists without decision logic
-
+    when_to_use:
+      - Content contains conditional logic (IF/THEN, Yes/No branches)
+      - Step-by-step protocols with decision points
+      - Assessment tables that trigger specific actions
+      - Treatment algorithms with multiple pathways
+    
+    indicators: "Flowcharts, decision trees, branching protocols, 'if...then' language"
+    key_feature: "Action depends on patient state/test results"
+    
+    avoid_for: 
+      - Static reference tables without decision logic
+      - Pure information without clinical actions
+      - Simple lists of danger signs (use warning_signs)
+  
   warning_signs:
-    description: Emergency signs requiring immediate attention
-    use_for:
-      - Emergency triage criteria
-      - Danger sign lists with immediate actions
+    when_to_use:
+      - Emergency/danger signs requiring immediate action
       - Urgent referral triggers
-    avoid_for: IF/THEN protocols (use clinical_pathway)
-
+      - Life-threatening criteria lists
+      - Red flag symptoms
+    
+    indicators: "Red/highlighted boxes, 'emergency', 'danger signs', 'refer immediately'"
+    key_feature: "Any sign present → immediate action required"
+    
+    avoid_for:
+      - Protocols with multiple conditional branches (use clinical_pathway)
+      - Educational content about recognizing symptoms (use patient_education)
+  
   patient_education:
-    description: Instructions for patients and caregivers
-    use_for:
-      - Home care instructions
-      - Advise patient to sections
-      - Prevention messages
-      - Return if guidance
+    when_to_use:
+      - Instructions for patients/caregivers
+      - Home care guidance
+      - Prevention and self-care messages
+      - "When to return" guidance
       - Medication instructions for patients
-    avoid_for: Clinical protocols (use clinical_pathway), danger signs (use warning_signs)
-
+    
+    indicators: "'Advise patient to...', 'tell caregiver...', 'return if...'"
+    key_feature: "Audience is patient/family, not clinician"
+    
+    avoid_for:
+      - Clinical decision-making content (use clinical_pathway)
+      - Emergency signs for clinicians (use warning_signs)
+  
   reference_table:
-    description: Structured lookup tables and classification systems
-    use_for:
-      - Lab value reference ranges
-      - Vital sign norms by age
+    when_to_use:
+      - Structured lookup tables
+      - Lab reference ranges
+      - Age/weight-based vital sign norms
+      - Classification or staging systems
       - Dosing charts without detailed instructions
-      - Classification/staging tables
-      - Risk scores or calculators
-    avoid_for: Protocols with actions, medication monographs
-
+      - Risk calculators or scoring systems
+    
+    indicators: "Tabular format, rows and columns, systematic classification"
+    key_feature: "Look up a value or category, no complex decision logic"
+    
+    avoid_for:
+      - Tables with extensive treatment instructions (use clinical_pathway)
+      - Detailed drug information (use drug_monograph)
+  
   drug_monograph:
-    description: Detailed medication information
-    use_for:
-      - Drug profiles with dosing, contraindications, side effects
-      - Medication-specific guidance
+    when_to_use:
+      - Comprehensive medication profiles
+      - Drug-specific pages with dosing, contraindications, side effects
       - Formulary entries
-    avoid_for: Brief medication mentions in protocols, simple dosing tables
-
+      - Medication monographs
+    
+    indicators: "Drug name as heading, organized sections for dosing/contraindications/interactions"
+    key_feature: "Primary focus is a single medication"
+    
+    avoid_for:
+      - Brief drug mentions in protocols (keep in clinical_pathway)
+      - Simple dosing tables (use reference_table)
+  
   generic:
-    description: Fallback for unstructured content
-    use_for:
+    when_to_use:
       - Background information and epidemiology
       - Definitions and glossaries
-      - Page headers/footers with metadata
-      - Orphaned footnotes that cannot be matched to a parent chunk
-    avoid_for: Most footnotes should be injected into relevant chunks via implementation_notes
+      - Page headers/footers
+      - Orphaned footnotes with no parent chunk
+      - Content that doesn't fit other types
+    
+    indicators: "Introductory text, context, metadata"
+    key_feature: "Informational, not actionable"
+    
+    note: "Use sparingly - most content should use a specific type"
 
-output_format: JSON array
+output_format: JSON array (no markdown wrapper, no commentary)
 
 schema_definitions:
   clinical_pathway:
@@ -185,8 +432,13 @@ schema_definitions:
     pathway_logic:
       type: array of objects
       meaning: V3.0 - Structured IF/THEN decision logic for clinical reasoning
+      instructions: |
+        - Capture ALL conditional branches (both positive AND negative paths)
+        - Use compound AND conditions to capture nested gates (e.g., "Glucose ≥ 11.1 AND Ketones present")
+        - Each distinct clinical scenario should be a separate entry
+        - If a secondary test/check acts as a gate, capture it in the if_condition
       fields:
-        if_condition: {type: string, meaning: "The clinical state or trigger"}
+        if_condition: {type: string, meaning: "The clinical state or trigger with ALL required conditions (use AND for gates)"}
         then_action: {type: string, meaning: "The medical action to take"}
         next_step: {type: string, meaning: "What happens next"}
       example:
@@ -196,6 +448,12 @@ schema_definitions:
         - if_condition: "Glucose < 3 and decreased consciousness"
           then_action: "Give Dextrose 10% 5mL/kg IV"
           next_step: "Emergency protocol -> Page 16"
+        - if_condition: "Glucose ≥ 11.1 and symptoms present and ketones present in urine"
+          then_action: "Give Sodium Chloride 0.9% 20mL/kg IV over 1 hour"
+          next_step: "Check for DKA signs and continue monitoring"
+        - if_condition: "Glucose ≥ 11.1 and symptoms present and ketones absent in urine"
+          then_action: "Routine monitoring and lifestyle advice"
+          next_step: "No immediate intervention required"
     implementation_notes:
       type: array of strings
       meaning: V3.0 - Step-by-step how-to instructions with INJECTED FOOTNOTE CONTENT
@@ -411,47 +669,189 @@ schema_definitions:
       type: array of strings
       meaning: Reference markers exactly as shown
 
-output_rules:
-  - Return JSON array only, no markdown or commentary
-  - Each item MUST have content_type as its first field
-  - Extract ALL content from the page using appropriate schemas
-  - Do NOT include system fields (chunk_id, guideline_id, page)
-  - Copy exact numbers, dosages, and thresholds from the image
-  - Keep all fields even if empty (use [] for arrays, "" for strings)
-  - Every chunk with a medical intervention MUST populate implementation_notes (inject footnotes or describe procedure from text)
-  - Output cross-reference markers ONLY in cross_references array, strip from all other text fields
+# ==============================================================================
+# EXTRACTION PATTERNS & EDGE CASES
+# ==============================================================================
 
-v3_logic_mapping_rules:
-  - For clinical_pathway chunks, populate pathway_logic with structured IF/THEN branches
-  - CRITICAL - Capture BOTH positive AND negative branches (Yes AND No paths)
-  - If a branch leads to "no further action", use then_action "Routine care" or "Exit pathway"
-  - Each decision point should be a separate pathway_logic entry
-  - Example - If glucose < 3 and alert is one entry, If glucose < 3 and unconscious is another entry
-  - Capture the COMPLETE logic tree, not just linear steps
-  - Map numeric thresholds precisely using range_metadata for machine filtering
+logic_mapping_patterns:
+  complete_decision_trees:
+    requirement: "Capture BOTH positive AND negative branches of every decision point"
+    rationale: "Prevents RAG from being silent when query matches the negative case"
+    
+    examples:
+      complete:
+        - if_condition: "BMI ≥ 25"
+          then_action: "Screen for diabetes"
+        - if_condition: "BMI < 25"
+          then_action: "Routine care - no additional screening"
+      
+      incomplete:
+        - if_condition: "BMI ≥ 25"
+          then_action: "Screen for diabetes"
+        # Missing: what happens if BMI < 25? (AVOID THIS)
+  
+  nested_gate_handling:
+    pattern: "Primary threshold → Secondary check → Action"
+    approach: "Use compound AND conditions to represent the full decision path"
+    
+    example:
+      flowchart: "Glucose ≥11.1 → Check ketones → [If positive: IV fluids] [If negative: monitor]"
+      extract_as:
+        - if_condition: "Glucose ≥ 11.1 AND Ketones present"
+          then_action: "Give IV fluids (staged protocol)"
+        - if_condition: "Glucose ≥ 11.1 AND Ketones absent"
+          then_action: "Routine monitoring"
+      
+      avoid: "Skipping the ketone check and going straight to action"
+  
+  temporal_staging:
+    pattern: "Time-dependent dosing or monitoring"
+    approach: "Label stages explicitly in implementation_notes"
+    
+    example:
+      - "Stage 1 (First hour): Give Sodium Chloride 0.9% 20mL/kg IV over 1 hour"
+      - "Stage 2 (Subsequent hours): Give Sodium Chloride 0.9% 10mL/kg/hour"
+      - "Monitoring: Check glucose every 15 minutes for first hour, then hourly"
+    
+    avoid: "Merging time-staged dosing into single instruction"
 
-v3_footnote_injection_rules:
-  - CRITICAL: Find all superscript markers (¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹, *, †, ‡) in the main content
-  - Match each marker to its footnote text at the page bottom
-  - INJECT the footnote into implementation_notes of the relevant chunk
-  - Format: "Footnote 1: [exact footnote text from page bottom]"
-  - If a footnote applies to multiple chunks, inject it into each relevant chunk
-  - Do NOT create separate generic chunks for footnotes (unless orphaned with no parent)
-  - Clean the main text by keeping markers in cross_references array only
+range_precision_rules:
+  general_principle: "Capture numeric ranges exactly as shown, preserving intentional gaps"
+  
+  inclusive_operators:
+    "≤": "inclusive_max: true"
+    "<": "inclusive_max: false"
+    "≥": "inclusive_min: true"
+    ">": "inclusive_min: false"
+  
+  unbounded_ranges:
+    "< 3": "{min_value: null, max_value: 3.0}"
+    "≥ 11.1": "{min_value: 11.1, max_value: null}"
+  
+  distinct_branches:
+    principle: "If guideline shows separate ranges (e.g., 3-6.0, 6.1-11.0, ≥11.1), keep them separate"
+    rationale: "Intentional gaps allow precise routing of edge cases like glucose = 6.05"
+    avoid: "Smoothing or merging ranges to eliminate gaps"
+  
+  fallback: "If range is ambiguous or unclear, capture as text in clinical_criteria and omit range_metadata"
 
-v3_exit_point_rules:
-  - Extract all "→ Page X" or "See page Y" markers as exit_points
-  - Format: {condition: "Decreased consciousness", target: "page 16"}
-  - The condition should describe WHEN to follow this exit
-  - Common exit targets: specific pages, "Hospital referral", "ICU", "Specialist review"
-  - Exit points represent care escalation or pathway transitions
+edge_case_handling:
+  ambiguous_symbols:
+    situation: "Unclear if '→ 37' is navigation or clinical value"
+    approach: "Default to navigation if pattern is '[text] → [number]' without units"
+    
+  missing_metadata:
+    situation: "Urgency or prescriber_level not explicitly stated"
+    approach: "Infer from context (primary care → nurse, specialist → doctor) or use 'not_applicable'"
+    
+  contradictory_information:
+    situation: "Two sections give different dosing"
+    approach: "Extract both as separate chunks, add note in implementation_notes flagging discrepancy"
+    
+  unreadable_sections:
+    situation: "OCR errors or poor image quality"
+    approach: "Capture what's readable, add note about unclear portions, don't fabricate"
+    
+  qualitative_criteria:
+    situation: "Decision based on 'severe pain' vs 'moderate pain' (no numbers)"
+    approach: "Capture as text in if_condition, omit range_metadata"
+    
+  mixed_content:
+    situation: "Page has both flowchart and paragraph text"
+    approach: "Create multiple chunks with appropriate types, cross-reference if related"
+
+global_page_context:
+  exclusions:
+    pattern: "Small text like 'Not for pregnant women' or 'Age < 18 only'"
+    handling: "Append to specific_scenario of ALL chunks on that page"
+    format: "Original scenario text (Excluding pregnant women)"
+  
+  continuation_markers:
+    pattern: "'Continued from page X' or 'Continued on page Y'"
+    handling: "Note in cross_references, consider as context for chunk organization"
+
+output_format_rules:
+  structure: "JSON array only - no markdown wrapper, no commentary"
+  field_order: "content_type must be first field in each object"
+  completeness: "Extract ALL content from page using appropriate schemas"
+  system_fields: "Do NOT include chunk_id, guideline_id, or page (added by system)"
+  precision: "Copy exact numbers, dosages, units, and medical terms from the image"
+  empty_fields: "Keep all schema fields even if empty ([] for arrays, '' for strings, null for optional)"
+  cross_references: "Put reference markers in cross_references array, strip from other text fields"
+  implementation_notes: "Every chunk with a medical intervention must populate this field"
 
 
 example:
   - content_type: clinical_pathway
     pathway_type: treatment
+    topic: Hyperglycemia Management  
+    specific_scenario: Random glucose ≥ 11.1 mmol/L with symptoms
+    range_metadata:
+      - parameter: "glucose"
+        min_value: 11.1
+        max_value: null
+        inclusive_min: true
+        inclusive_max: true
+        unit: "mmol/L"
+    visual_structure: flowchart_path
+    urgency: urgent
+    prescriber_level: doctor
+    clinical_criteria:
+      conditions:
+        - Random glucose ≥ 11.1 mmol/L
+        - Symptoms of hyperglycemia present
+      emergency_triggers:
+        - Ketones present in urine (DKA risk)
+        - Decreased consciousness
+    protocol:
+      assess:
+        - Check glucose level
+        - Check urine for ketones
+        - Assess hydration status
+      treat:
+        - Give IV fluids if ketones present
+        - Routine monitoring if ketones absent
+      advise:
+        - Monitor glucose and ketones
+    pathway_logic:
+      - if_condition: "Glucose ≥ 11.1 AND Symptoms present AND Ketones present in urine"
+        then_action: "Give Sodium Chloride 0.9% IV - staged protocol (see implementation_notes)"
+        next_step: "Monitor for DKA signs, check glucose hourly"
+      - if_condition: "Glucose ≥ 11.1 AND Symptoms present AND Ketones absent in urine"
+        then_action: "Routine monitoring and lifestyle advice"
+        next_step: "No emergency intervention - recheck in 24 hours"
+      - if_condition: "Glucose ≥ 11.1 AND Decreased consciousness"
+        then_action: "Emergency protocol - immediate hospital referral"
+        next_step: "Transfer to emergency department"
+    implementation_notes:
+      - "Footnote 6: Avoid IV insulin in primary care - refer to hospital for insulin protocols"
+      - "Stage 1 (First hour): Give Sodium Chloride 0.9% 20mL/kg IV over 1 hour"
+      - "Stage 2 (Subsequent hours): Give Sodium Chloride 0.9% 10mL/kg IV per hour until ketones clear"
+      - "Ketone testing: Use urine dipstick, check every 2 hours during treatment"
+      - "Recheck glucose every 15 minutes for first hour, then hourly"
+    exit_points:
+      - condition: "Decreased consciousness"
+        target: "page 16"
+      - condition: "Chest pain develops"
+        target: "page 37"
+      - condition: "Ketones persist after 4 hours of treatment"
+        target: "Hospital referral for insulin therapy"
+    cross_references:
+      - "-> 16"
+      - "-> 37"
+      - "6"
+    disposition: "Continue treatment until ketones clear, then transition to oral hydration and monitoring"
+  - content_type: clinical_pathway
+    pathway_type: treatment
     topic: Hypoglycemia Management
     specific_scenario: Random glucose < 3 mmol/L
+    range_metadata:
+      - parameter: "glucose"
+        min_value: null
+        max_value: 3.0
+        inclusive_min: true
+        inclusive_max: false
+        unit: "mmol/L"
     visual_structure: flowchart_path
     urgency: emergency
     prescriber_level: doctor
@@ -556,40 +956,226 @@ example:
       - "6: CVD = Cardiovascular Disease"
     cross_references: []
     raw_text: "Note: Only create generic chunks for orphaned footnotes. Most footnotes should be injected into relevant clinical_pathway or warning_signs chunks via implementation_notes or safety_checks."
+  - content_type: clinical_pathway
+    pathway_type: diagnostic
+    topic: Pneumonia Assessment
+    specific_scenario: Child with cough and difficulty breathing
+    range_metadata:
+      - parameter: "respiratory_rate"
+        min_value: 50
+        max_value: null
+        inclusive_min: true
+        inclusive_max: true
+        unit: "breaths/min"
+    visual_structure: routine_care_table
+    urgency: urgent
+    prescriber_level: nurse
+    clinical_criteria:
+      conditions:
+        - Fast breathing (RR ≥ 50/min in infants)
+        - Chest indrawing
+      emergency_triggers: []
+    protocol:
+      assess:
+        - Count respiratory rate for 1 full minute
+        - Look for chest indrawing
+        - Check for danger signs
+      treat:
+        - Give first dose Amoxicillin 25mg/kg PO
+        - Advise on home care
+      advise:
+        - Return in 2 days for follow-up or sooner if worsening
+    pathway_logic:
+      - if_condition: "Respiratory rate ≥ 50/min OR Chest indrawing present"
+        then_action: "Diagnose pneumonia - give Amoxicillin"
+        next_step: "Home treatment with 2-day follow-up"
+      - if_condition: "Respiratory rate < 50/min AND No chest indrawing"
+        then_action: "Not pneumonia - symptomatic treatment only"
+        next_step: "Advise on when to return"
+    implementation_notes:
+      - "Dosing: Amoxicillin 25mg/kg PO twice daily for 5 days"
+      - "For age < 2 months: use 50 breaths/min cutoff instead"
+    exit_points:
+      - condition: "Danger signs present"
+        target: "page 8"
+    cross_references:
+      - "-> 8"
+    disposition: "Home treatment unless danger signs develop"
+  - content_type: reference_table
+    topic: Pediatric Vital Signs
+    table_name: Normal Respiratory Rate by Age
+    table_purpose: Identify tachypnea based on age-specific cutoffs
+    columns:
+      - Age Group
+      - Normal RR (breaths/min)
+      - Tachypnea Threshold
+    rows:
+      - key: "< 2 months"
+        values:
+          "Age Group": "< 2 months"
+          "Normal RR (breaths/min)": "30-60"
+          "Tachypnea Threshold": "≥ 60"
+      - key: "2-12 months"
+        values:
+          "Age Group": "2-12 months"
+          "Normal RR (breaths/min)": "25-50"
+          "Tachypnea Threshold": "≥ 50"
+      - key: "1-5 years"
+        values:
+          "Age Group": "1-5 years"
+          "Normal RR (breaths/min)": "20-40"
+          "Tachypnea Threshold": "≥ 40"
+    units:
+      "Normal RR (breaths/min)": "breaths/min"
+      "Tachypnea Threshold": "breaths/min"
+    notes:
+      - "Count for full 60 seconds when child is calm"
+      - "Crying or fever can increase respiratory rate"
+    cross_references: []
+    source_reference: "WHO IMCI guidelines"
+  - content_type: drug_monograph
+    topic: Pain Management
+    drug_name: Paracetamol
+    brand_names:
+      - Tylenol
+      - Panadol
+    drug_class: Analgesic-antipyretic
+    indications:
+      - Mild to moderate pain
+      - Fever reduction
+    contraindications:
+      - Severe liver disease
+      - Known hypersensitivity to paracetamol
+    dosing:
+      - route: PO
+        dose: 10-15 mg/kg
+        frequency: Every 4-6 hours
+        duration: As needed
+        special_populations: "Maximum 4 doses in 24 hours"
+      - route: IV
+        dose: 15 mg/kg
+        frequency: Every 6 hours
+        duration: As needed
+        special_populations: "Use only if PO route unavailable"
+    adverse_effects:
+      - Rare: skin rash
+      - Overdose: hepatotoxicity
+    drug_interactions:
+      - Warfarin (may potentiate anticoagulant effect)
+    monitoring:
+      - Monitor liver function if long-term use
+    pregnancy_category: Safe in pregnancy at standard doses
+    cross_references: []
+    notes:
+      - "Most common cause of acute liver failure in overdose"
+      - "Maximum daily dose: 4g in adults, 75mg/kg in children"
 
-medical_accuracy_rules:
-  - CRITICAL - Verify clinical terms are transcribed correctly
-  - Watch for OCR errors - skin turgor NOT skin tumour
-  - Route precision - IM (intramuscular) vs IV (intravenous) are NOT interchangeable
-  - Units - mmol/L vs mg/dL, preserve exact units
-  - BP format - use forward slash (BP < 90/60 NOT BP < 90-60)
-  - Numeric precision - copy exactly and extract to range_metadata (< 3 vs ≤ 3 matters for boundaries)
-  - If flowchart shows Yes/No branches, create separate pathway_logic entries for BOTH branches
-  - Do not combine OR conditions into single entries, split them
-  - Example BAD - If glucose < 3 or patient unconscious, give dextrose
-  - Example GOOD - Two entries, If glucose < 3 and alert then sugar water, If glucose < 3 and unconscious then IV dextrose
+medical_transcription_accuracy:
+  critical_distinctions:
+    drug_routes: "IM (intramuscular) vs IV (intravenous) vs PO (oral) - NOT interchangeable"
+    units: "mmol/L vs mg/dL, mL vs L, mg vs g - preserve exact units"
+    operators: "< vs ≤, > vs ≥ - boundary precision matters"
+    blood_pressure: "Use forward slash: 90/60 mmHg (not 90-60)"
+    terminology: "Watch OCR errors: 'turgor' not 'tumour', 'pallor' not 'paler'"
+  
+  numeric_precision:
+    principle: "Copy numbers exactly as shown"
+    examples:
+      - shown: "3.0 mmol/L" → extract: "3.0" (not 3)
+      - shown: "< 3" → inclusive_max: false
+      - shown: "≤ 3" → inclusive_max: true
+  
+  conditional_logic_splitting:
+    avoid: "Combining OR conditions into single pathway_logic entry"
+    correct_approach: "Split into separate entries, one for each outcome"
+    
+    example_incorrect:
+      - if_condition: "Glucose < 3 OR Patient unconscious"
+        then_action: "Give dextrose"
+    
+    example_correct:
+      - if_condition: "Glucose < 3 AND Patient alert"
+        then_action: "Give sugar water orally"
+      - if_condition: "Glucose < 3 AND Patient unconscious"
+        then_action: "Give Dextrose 10% IV"
 
-range_boundary_rules:
-  - For any numeric threshold, populate range_metadata with explicit boundaries
-  - Use null for unbounded ends (e.g., glucose < 3 has max_value 3.0, min_value null)
-  - Set inclusive flags based on symbols - < means inclusive_max false, ≤ means inclusive_max true
-  - Example for "glucose 3-6" - min_value 3.0 (inclusive_min true), max_value 6.0 (inclusive_max true)
-  - This allows code to filter "glucose = 3.0" to correct chunk without LLM ambiguity
+# ==============================================================================
+# COMMON MISTAKES TO AVOID
+# ==============================================================================
 
-negative_branch_rules:
-  - Every Yes/No decision point MUST have entries for both branches
-  - If No branch means "stop" or "routine care", create explicit entry with then_action "Routine care" or "Exit pathway"
-  - Example - If BMI < 25 then "Exit pathway - no diabetes risk screening needed"
-  - This prevents RAG from being "silent" when user asks about healthy patients
+common_extraction_errors:
+  navigation_symbol_confusion:
+    error: "Misinterpreting '→ 37' as a clinical value (temperature, pressure, etc.)"
+    correct: "Pattern '[text] → [number]' without units is navigation to page"
+    examples:
+      - wrong: "clinical_criteria: ['Chest pain 37°C']"
+        right: "exit_points: [{condition: 'Chest pain', target: 'page 37'}]"
+        source: "Chest pain → 37"
+      
+      - wrong: "conditions: ['Decreased consciousness > 16']"
+        right: "exit_points: [{condition: 'Decreased consciousness', target: 'page 16'}]"
+        source: "Decreased consciousness → 16"
+  
+  incomplete_decision_trees:
+    error: "Only capturing positive branch, missing negative outcomes"
+    correct: "Every decision point must have entries for both outcomes"
+    example:
+      wrong:
+        - if_condition: "BMI ≥ 25"
+          then_action: "Screen for diabetes"
+        # What happens if BMI < 25? Missing!
+      
+      right:
+        - if_condition: "BMI ≥ 25"
+          then_action: "Screen for diabetes"
+        - if_condition: "BMI < 25"
+          then_action: "Routine care - no additional screening"
+  
+  skipped_secondary_gates:
+    error: "Missing intermediate checks in nested decision trees"
+    correct: "Capture all decision points using compound AND conditions"
+    example:
+      wrong:
+        - if_condition: "Glucose ≥ 11.1"
+          then_action: "Give IV fluids"
+        # Skips the ketone check!
+      
+      right:
+        - if_condition: "Glucose ≥ 11.1 AND Ketones present"
+          then_action: "Give IV fluids (staged protocol)"
+        - if_condition: "Glucose ≥ 11.1 AND Ketones absent"
+          then_action: "Routine monitoring"
+  
+  merged_temporal_stages:
+    error: "Combining time-dependent dosing into single instruction"
+    correct: "Label stages explicitly to prevent dosing errors"
+    example:
+      wrong: "Give Sodium Chloride 0.9% 20mL/kg IV"
+      right:
+        - "Stage 1 (First hour): Give Sodium Chloride 0.9% 20mL/kg IV over 1 hour"
+        - "Stage 2 (Subsequent hours): Give Sodium Chloride 0.9% 10mL/kg/hour"
+  
+  range_smoothing:
+    error: "Merging distinct ranges that should be separate"
+    correct: "Keep ranges separate even if there are gaps"
+    example:
+      wrong: "range_metadata: [{min: 3.0, max: 11.1}] # Merged!"
+      right: "Create 3 separate chunks for 3-6.0, 6.1-11.0, ≥11.1 ranges"
+  
+  orphaned_footnotes:
+    error: "Creating separate generic chunks for all footnotes"
+    correct: "Inject footnotes into implementation_notes of relevant chunk"
+    example:
+      wrong: "generic chunk with all page footnotes"
+      right: "Each chunk has relevant footnotes injected in its implementation_notes"
 
-global_exclusion_rules:
-  - Scan page for global warnings (usually small text at bottom or in margins)
-  - Common patterns - "Not for pregnant women", "Age < 18 only", "Exclude if on insulin"
-  - Append these to specific_scenario field of EVERY chunk on that page
-  - This prevents dangerous misapplication of protocols to excluded populations
-
-visual_hierarchy_priority:
-  - If page contains warning_signs (red box), it has HIGHEST priority
-  - All clinical_pathway chunks on same page must include exit_point or logic that checks emergency triggers first
-  - Example - If glucose pathway and severe hypoglycemia warning on same page, pathway must reference warning
-  - This ensures emergency content is never buried or skipped
+verification_checklist:
+  before_finalizing:
+    - "Navigation arrows (→) are in exit_points, not clinical_criteria"
+    - "Every decision branch has BOTH positive and negative outcomes"
+    - "Secondary gates captured with compound AND conditions"
+    - "Time-staged dosing labeled with explicit stages"
+    - "Range boundaries match visual exactly (no smoothing)"
+    - "Footnotes injected into relevant chunks"
+    - "Medical terms, units, and dosages copied exactly"
+    - "All page content extracted (including headers, footers, margins)"
